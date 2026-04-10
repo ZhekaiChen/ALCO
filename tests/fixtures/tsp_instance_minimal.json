@@ -1,0 +1,27 @@
+{
+  "instance_id": "tsp_000001",
+  "problem_type": "tsp",
+  "node_count": 5,
+  "distance_metric": "euclidean_2d",
+  "indexing": "tsplib_1_based",
+  "nodes": [
+    {"node_id": 1, "x": 0.0, "y": 0.0},
+    {"node_id": 2, "x": 1.0, "y": 0.0},
+    {"node_id": 3, "x": 1.0, "y": 1.0},
+    {"node_id": 4, "x": 0.0, "y": 1.0},
+    {"node_id": 5, "x": 0.5, "y": 1.5}
+  ],
+  "generation": {
+    "generator": "random_euclidean",
+    "seed": 42,
+    "coordinate_range": [0.0, 2.0]
+  },
+  "reference_solution": {
+    "solver": "LKH3",
+    "tour": [1, 2, 3, 5, 4],
+    "tour_length": 4.4142135624
+  },
+  "metadata": {
+    "comment": "Minimal fixture for schema and parser tests."
+  }
+}

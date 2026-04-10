@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/rollout_state.schema.json",
+  "title": "RolloutState",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "instance_id",
+    "step_index",
+    "node_count",
+    "partial_route",
+    "visited_nodes",
+    "unvisited_nodes",
+    "current_node",
+    "is_terminal",
+    "indexing"
+  ],
+  "properties": {
+    "instance_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "step_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "node_count": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "partial_route": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "visited_nodes": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "unvisited_nodes": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "current_node": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "current_position": {
+      "$ref": "#/$defs/positionOrNull"
+    },
+    "is_terminal": {
+      "type": "boolean"
+    },
+    "indexing": {
+      "type": "string",
+      "const": "tsplib_1_based"
+    },
+    "notes": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "positionOrNull": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

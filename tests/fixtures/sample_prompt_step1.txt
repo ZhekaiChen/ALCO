@@ -1,0 +1,27 @@
+You are solving a Traveling Salesman Problem step by step.
+Your job in this step is not to output the full tour, but to choose exactly one next node to append to the current partial route.
+Think carefully about the global tour quality before deciding.
+Provide detailed reasoning about the overall route structure and the tradeoffs among candidate next nodes.
+At the end, output exactly one final answer in the format:
+<FINAL_NEXT_NODE>INTEGER</FINAL_NEXT_NODE>
+Do not output multiple final tags.
+
+Problem setup:
+- Number of nodes: 5
+- Node coordinates:
+  1: (0.0, 0.0)
+  2: (1.0, 0.0)
+  3: (1.0, 1.0)
+  4: (0.0, 1.0)
+  5: (0.5, 1.5)
+
+Current partial route:
+[1, 2, 3]
+
+Current node:
+3 at (1.0, 1.0)
+
+Unvisited nodes:
+[4, 5]
+
+Choose the next node.

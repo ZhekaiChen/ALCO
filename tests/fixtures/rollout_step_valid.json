@@ -1,0 +1,47 @@
+{
+  "instance_id": "tsp_000001",
+  "episode_id": "episode_000001",
+  "step_index": 3,
+  "prompt_text": "You are solving a Traveling Salesman Problem step by step...",
+  "raw_model_output": "I compare nodes 4 and 5 globally before deciding.\n<FINAL_NEXT_NODE>5</FINAL_NEXT_NODE>",
+  "reasoning_text": "I compare nodes 4 and 5 globally before deciding.",
+  "final_tag_parse": {
+    "status": "success",
+    "tag_count": 1,
+    "parsed_next_node": 5
+  },
+  "action_validation": {
+    "is_valid": true,
+    "failure_reason": null
+  },
+  "reward_signal": {
+    "reward_mode": "gap_delta_placeholder",
+    "reward_value": 0.12,
+    "components": {
+      "reference_tour_length": 4.4142135624,
+      "constrained_tour_length": 4.5142135624
+    }
+  },
+  "solver_completion": {
+    "status": "success",
+    "constrained_tour": [1, 2, 3, 5, 4],
+    "constrained_tour_length": 4.5142135624,
+    "reference_tour_length": 4.4142135624,
+    "debug_paths": {
+      "problem_file": "outputs/debug/problem_step3.tsp",
+      "param_file": "outputs/debug/problem_step3.par",
+      "tour_file": "outputs/debug/problem_step3.tour"
+    }
+  },
+  "state_before": {
+    "partial_route": [1, 2, 3],
+    "unvisited_nodes": [4, 5]
+  },
+  "state_after": {
+    "partial_route": [1, 2, 3, 5],
+    "unvisited_nodes": [4]
+  },
+  "metadata": {
+    "model_name": "example-model"
+  }
+}

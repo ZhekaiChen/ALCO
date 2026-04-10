@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/episode_log.schema.json",
+  "title": "EpisodeLog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "episode_id",
+    "instance_id",
+    "status",
+    "node_count",
+    "initial_state",
+    "final_route",
+    "step_logs",
+    "summary_metrics"
+  ],
+  "properties": {
+    "episode_id": {
+      "type": "string"
+    },
+    "instance_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["success", "failed_parse", "failed_invalid_action", "failed_solver", "failed_other"]
+    },
+    "node_count": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "initial_state": {
+      "type": "object"
+    },
+    "final_route": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "step_logs": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "summary_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "num_steps",
+        "parse_success_rate",
+        "valid_action_rate",
+        "total_reward"
+      ],
+      "properties": {
+        "num_steps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parse_success_rate": {
+          "type": "number"
+        },
+        "valid_action_rate": {
+          "type": "number"
+        },
+        "total_reward": {
+          "type": "number"
+        },
+        "final_gap_to_reference": {
+          "type": ["number", "null"]
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

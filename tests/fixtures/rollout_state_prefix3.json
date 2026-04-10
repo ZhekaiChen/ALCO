@@ -1,0 +1,18 @@
+{
+  "instance_id": "tsp_000001",
+  "step_index": 3,
+  "node_count": 5,
+  "partial_route": [1, 2, 3],
+  "visited_nodes": [1, 2, 3],
+  "unvisited_nodes": [4, 5],
+  "current_node": 3,
+  "current_position": {
+    "x": 1.0,
+    "y": 1.0
+  },
+  "is_terminal": false,
+  "indexing": "tsplib_1_based",
+  "notes": {
+    "prefix_semantics": "ordered_fixed_prefix"
+  }
+}

@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/rollout_step.schema.json",
+  "title": "RolloutStepLog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "instance_id",
+    "episode_id",
+    "step_index",
+    "prompt_text",
+    "raw_model_output",
+    "reasoning_text",
+    "final_tag_parse",
+    "action_validation",
+    "reward_signal",
+    "solver_completion",
+    "state_before",
+    "state_after"
+  ],
+  "properties": {
+    "instance_id": {
+      "type": "string"
+    },
+    "episode_id": {
+      "type": "string"
+    },
+    "step_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "prompt_text": {
+      "type": "string"
+    },
+    "raw_model_output": {
+      "type": "string"
+    },
+    "reasoning_text": {
+      "type": "string"
+    },
+    "final_tag_parse": {
+      "$ref": "#/$defs/finalTagParse"
+    },
+    "action_validation": {
+      "$ref": "#/$defs/actionValidation"
+    },
+    "reward_signal": {
+      "$ref": "#/$defs/rewardSignal"
+    },
+    "solver_completion": {
+      "$ref": "#/$defs/solverCompletion"
+    },
+    "state_before": {
+      "type": "object"
+    },
+    "state_after": {
+      "type": ["object", "null"]
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "finalTagParse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "tag_count", "parsed_next_node"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["success", "missing_tag", "multiple_tags", "malformed_tag"]
+        },
+        "tag_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parsed_next_node": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        }
+      }
+    },
+    "actionValidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["is_valid", "failure_reason"],
+      "properties": {
+        "is_valid": {
+          "type": "boolean"
+        },
+        "failure_reason": {
+          "type": ["string", "null"],
+          "enum": [null, "parse_failure", "out_of_range", "already_visited", "terminal_state", "other"]
+        }
+      }
+    },
+    "rewardSignal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reward_mode", "reward_value"],
+      "properties": {
+        "reward_mode": {
+          "type": "string"
+        },
+        "reward_value": {
+          "type": "number"
+        },
+        "components": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "solverCompletion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "constrained_tour", "constrained_tour_length", "reference_tour_length"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["success", "skipped", "failed"]
+        },
+        "constrained_tour": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          ]
+        },
+        "constrained_tour_length": {
+          "type": ["number", "null"]
+        },
+        "reference_tour_length": {
+          "type": "number"
+        },
+        "debug_paths": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

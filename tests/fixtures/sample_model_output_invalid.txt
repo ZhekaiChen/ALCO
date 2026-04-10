@@ -1,0 +1,3 @@
+I think node 2 is still interesting because it lies on the bottom edge. Maybe returning there keeps options open.
+
+<FINAL_NEXT_NODE>2</FINAL_NEXT_NODE>

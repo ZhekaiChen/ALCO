@@ -1,0 +1,3 @@
+The current route has already moved from the lower-left corner to the right side of the square and then upward. From node 3, the main candidates are node 4 and node 5. If I choose node 4 now, I likely force a later detour upward to node 5 and then back down. If I choose node 5 first, I can finish the upper point before returning to node 4, which looks more globally coherent with the current geometry.
+
+<FINAL_NEXT_NODE>5</FINAL_NEXT_NODE>

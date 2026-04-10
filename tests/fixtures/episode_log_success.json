@@ -1,0 +1,43 @@
+{
+  "episode_id": "episode_000001",
+  "instance_id": "tsp_000001",
+  "status": "success",
+  "node_count": 5,
+  "initial_state": {
+    "partial_route": [1],
+    "unvisited_nodes": [2, 3, 4, 5]
+  },
+  "final_route": [1, 2, 3, 5, 4],
+  "step_logs": [
+    {
+      "step_index": 1,
+      "parsed_next_node": 2,
+      "reward_value": 0.05
+    },
+    {
+      "step_index": 2,
+      "parsed_next_node": 3,
+      "reward_value": 0.08
+    },
+    {
+      "step_index": 3,
+      "parsed_next_node": 5,
+      "reward_value": 0.12
+    },
+    {
+      "step_index": 4,
+      "parsed_next_node": 4,
+      "reward_value": 0.15
+    }
+  ],
+  "summary_metrics": {
+    "num_steps": 4,
+    "parse_success_rate": 1.0,
+    "valid_action_rate": 1.0,
+    "total_reward": 0.4,
+    "final_gap_to_reference": 0.0
+  },
+  "metadata": {
+    "model_name": "example-model"
+  }
+}

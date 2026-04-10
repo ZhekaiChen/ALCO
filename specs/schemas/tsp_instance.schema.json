@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/tsp_instance.schema.json",
+  "title": "TSPInstance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "instance_id",
+    "problem_type",
+    "node_count",
+    "nodes",
+    "distance_metric",
+    "indexing",
+    "generation"
+  ],
+  "properties": {
+    "instance_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "problem_type": {
+      "const": "tsp"
+    },
+    "node_count": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "distance_metric": {
+      "type": "string",
+      "enum": ["euclidean_2d"]
+    },
+    "indexing": {
+      "type": "string",
+      "const": "tsplib_1_based"
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "generation": {
+      "$ref": "#/$defs/generation"
+    },
+    "reference_solution": {
+      "$ref": "#/$defs/referenceSolution"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "x", "y"],
+      "properties": {
+        "node_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      }
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generator", "seed"],
+      "properties": {
+        "generator": {
+          "type": "string"
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "coordinate_range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "referenceSolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["solver", "tour", "tour_length"],
+      "properties": {
+        "solver": {
+          "type": "string"
+        },
+        "tour": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "tour_length": {
+          "type": "number"
+        }
+      }
+    }
+  }
+}
