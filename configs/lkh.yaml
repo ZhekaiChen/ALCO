@@ -1,0 +1,19 @@
+# Phase-2 LKH integration config.
+# Canonical pinned local source archive path for this project:
+# third_party/LKH3/LKH-3.0.14.tar
+
+solver_executable: third_party/LKH3/LKH-3.0.14/LKH
+source_archive: third_party/LKH3/LKH-3.0.14.tar
+require_source_archive: true
+
+# Forwarded directly to lkh.solve(...), then to LKH parameter file.
+runs: 1
+max_trials: null
+seed: null
+trace_level: 1
+time_limit: null
+extra_params: {}
+
+debug:
+  enabled: false
+  output_root: outputs/debug/lkh

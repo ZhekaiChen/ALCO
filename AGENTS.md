@@ -247,8 +247,19 @@ Keep rollout logic and training logic separated where possible.
 
 ---
 
-## LKH3 debugging rules
+## LKH integration policy
 
+- LKH-3 must be installed locally from the pinned local source archive at `third_party/LKH3/LKH-3.0.14.tar`.
+- The `.tar` archive above is the canonical pinned source archive path for this project.
+- The primary Python-side programmatic interface must use the `lkh` package.
+- The project should call LKH-3 through `lkh.solve(...)` with an explicit configurable solver executable path.
+- Do not use a custom raw subprocess-only wrapper as the main integration path unless explicitly instructed.
+- Keep the local LKH-3 build process reproducible and documented.
+- Preserve the fixed-prefix constrained-completion requirement as a first-class explicit interface.
+
+---
+
+## LKH3 debugging rules
 Whenever solver behavior is implemented or changed:
 - keep generated problem files inspectable,
 - keep parameter files inspectable,

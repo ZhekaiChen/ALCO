@@ -1,0 +1,5 @@
+# Repository paths used by scripts and experiments.
+data_root: data
+outputs_root: outputs
+third_party_root: third_party
+

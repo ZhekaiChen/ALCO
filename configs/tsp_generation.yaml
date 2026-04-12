@@ -1,0 +1,7 @@
+# Phase-1 data generation defaults.
+node_count: 20
+seed: 1234
+coordinate_range: [0.0, 1.0]
+indexing: tsplib_1_based
+distance_metric: euclidean_2d
+

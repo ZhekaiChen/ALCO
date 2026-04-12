@@ -1,0 +1,66 @@
+# Phase-3.5 real zero-shot rollout defaults.
+
+# Input source:
+# - If generate_random=true, a matrix of random instances is generated.
+# - If generate_random=false, instance_path is loaded directly.
+instance_path: null
+generate_random: true
+save_generated_instances: true
+instance_id_prefix: tsp
+
+# Random instance generation matrix.
+node_counts: [10, 25, 50]
+instances_per_node_count: 1
+random_seed: 12345
+coordinate_range: [0, 10000]
+integer_coordinates: true
+
+# Number of rollout episodes to run per instance.
+episodes_per_instance: 1
+
+# Model backend selection.
+backend: dmx_openai_compatible
+model_name: null
+static_response_path: null
+
+# DMXAPI OpenAI-compatible request settings.
+api:
+  base_url: null
+  base_url_env: DMXAPI_BASE_URL
+  api_key_env: DMXAPI_API_KEY
+  endpoint_path: /chat/completions
+  model_id: claude-opus-4-6-thinking
+  thinking_effort: high
+  thinking_effort_field: reasoning_effort
+  max_tokens: 4096
+  temperature: 0.2
+  top_p: 1.0
+  timeout_seconds: 180
+  extra_headers: {}
+  extra_body: {}
+  debug:
+    enabled: false
+    output_root: outputs/debug/dmxapi
+    dry_run: false
+
+# Prompt rendering options.
+include_current_position: true
+include_visited_nodes: false
+include_unvisited_nodes: true
+
+# Step policy for real zero-shot traces.
+start_node_policy: random
+fixed_start_node: 1
+rollout_step_policy: node_count_minus_2
+fixed_prediction_steps: null
+auto_complete_last_node: true
+close_tour_to_start: true
+max_steps: null
+
+# Solver integration for reference tour comparison.
+enable_solver_completion: true
+lkh_config: configs/lkh.yaml
+
+# Output paths.
+output_root: outputs/zeroshot
+run_name: null

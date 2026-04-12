@@ -8,3 +8,6 @@ logs/
 checkpoints/
 data/
 .DS_Store
+
+# Local extracted/build tree from pinned LKH archive.
+third_party/LKH3/LKH-3.0.14/
