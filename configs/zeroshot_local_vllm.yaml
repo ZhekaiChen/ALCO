@@ -1,0 +1,64 @@
+# Minimal local vLLM zero-shot smoke config (Phase 3.6b).
+
+instance_path: null
+generate_random: true
+save_generated_instances: true
+instance_id_prefix: tsp_local
+
+node_counts: [10]
+instances_per_node_count: 1
+random_seed: 12345
+coordinate_range: [0, 10000]
+integer_coordinates: true
+episodes_per_instance: 1
+
+backend: local_vllm_openai_compatible
+model_name: null
+static_response_path: null
+
+api:
+  base_url: http://127.0.0.1:8000/v1
+  base_url_env: LOCAL_VLLM_BASE_URL
+  api_key_env: LOCAL_VLLM_API_KEY
+  require_api_key: false
+  endpoint_path: /chat/completions
+  model_id: Qwen/Qwen3-30B-A3B-Thinking-2507
+  # Keep null by default for compatibility across local OpenAI-compatible servers.
+  thinking_effort: null
+  thinking_effort_field: reasoning_effort
+  max_tokens: 4096
+  temperature: 0.2
+  top_p: 1.0
+  timeout_seconds: 300
+  extra_headers: {}
+  extra_body: {}
+  provider_name: local_vllm
+  backend_name: local_vllm_openai_compatible
+  local_model_path: /mnt/zc/models/Qwen/Qwen3-30B-A3B-Thinking-2507
+  served_model_name: Qwen/Qwen3-30B-A3B-Thinking-2507
+  server_host: 127.0.0.1
+  server_port: 8000
+  server_tensor_parallel_size: 8
+  debug:
+    enabled: false
+    output_root: outputs/debug/local_vllm
+    dry_run: false
+
+include_current_position: true
+include_visited_nodes: false
+include_unvisited_nodes: true
+
+start_node_policy: random
+fixed_start_node: 1
+rollout_step_policy: node_count_minus_2
+fixed_prediction_steps: null
+auto_complete_last_node: true
+close_tour_to_start: true
+max_steps: null
+
+enable_solver_completion: true
+lkh_config: configs/lkh.yaml
+
+output_root: outputs/zeroshot
+run_name: null
+show_progress: true

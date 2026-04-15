@@ -19,6 +19,12 @@ integer_coordinates: true
 episodes_per_instance: 1
 
 # Model backend selection.
+# Supported:
+# - dmx_openai_compatible
+# - local_vllm_openai_compatible
+# - local_deterministic
+# - local_static
+# - api_todo
 backend: dmx_openai_compatible
 model_name: null
 static_response_path: null
@@ -29,6 +35,7 @@ api:
   base_url_env: DMXAPI_BASE_URL
   api_key_env: DMXAPI_API_KEY
   endpoint_path: /chat/completions
+  model_profile: claude-opus-4-6-thinking
   model_id: claude-opus-4-6-thinking
   thinking_effort: high
   thinking_effort_field: reasoning_effort
@@ -36,6 +43,7 @@ api:
   temperature: 0.2
   top_p: 1.0
   timeout_seconds: 180
+  omit_request_fields: []
   extra_headers: {}
   extra_body: {}
   debug:
@@ -56,6 +64,10 @@ fixed_prediction_steps: null
 auto_complete_last_node: true
 close_tour_to_start: true
 max_steps: null
+max_step_retries: 0
+retry_on_parse_failure: true
+retry_on_provider_error: true
+retry_backoff_seconds: 1.0
 
 # Solver integration for reference tour comparison.
 enable_solver_completion: true
@@ -64,3 +76,4 @@ lkh_config: configs/lkh.yaml
 # Output paths.
 output_root: outputs/zeroshot
 run_name: null
+show_progress: true

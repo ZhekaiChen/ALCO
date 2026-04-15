@@ -1,0 +1,24 @@
+# Phase-4 SFT trace mining defaults.
+
+input:
+  run_dirs: []
+  root_dirs:
+    - outputs/zeroshot
+
+filters:
+  require_parse_success: true
+  require_valid_action: true
+  require_episode_success: false
+  require_solver_completion: false
+  max_final_gap_to_reference: null
+  max_step_gap_to_reference: null
+  node_counts: null
+  model_ids: null
+  min_reasoning_chars: 1
+  max_reasoning_chars: null
+
+output:
+  jsonl_path: outputs/sft/sft_examples.jsonl
+  chat_jsonl_path: null
+  summary_path: outputs/sft/sft_summary.json
+  dry_run: false

@@ -5,9 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from tsp_action_rl.data import load_rollout_state, load_tsp_instance
-from tsp_action_rl.inference import LocalDeterministicModelBackend, LocalStaticResponseBackend, ModelOutput
+from tsp_action_rl.inference import (
+    DMXAPIBackendError,
+    LocalDeterministicModelBackend,
+    LocalStaticResponseBackend,
+    ModelOutput,
+)
 from tsp_action_rl.prompts import PromptRenderConfig, render_tsp_next_node_prompt
-from tsp_action_rl.rollout import ZeroShotRolloutConfig, ZeroShotRolloutRunner
+from tsp_action_rl.rollout import RolloutProgressUpdate, ZeroShotRolloutConfig, ZeroShotRolloutRunner
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
@@ -19,6 +24,28 @@ class _FailingBackend:
     def generate(self, prompt_text: str, *, instance, state) -> ModelOutput:  # type: ignore[no-untyped-def]
         del prompt_text, instance, state
         raise RuntimeError("simulated backend failure")
+
+
+class _SequenceBackend:
+    backend_type = "api"
+    model_name = "sequence-backend"
+
+    def __init__(self, responses: list[str | Exception]) -> None:
+        if not responses:
+            raise ValueError("responses must not be empty")
+        self._responses = responses
+        self._index = 0
+        self.calls = 0
+
+    def generate(self, prompt_text: str, *, instance, state) -> ModelOutput:  # type: ignore[no-untyped-def]
+        del prompt_text, instance, state
+        self.calls += 1
+        current_index = min(self._index, len(self._responses) - 1)
+        self._index += 1
+        response = self._responses[current_index]
+        if isinstance(response, Exception):
+            raise response
+        return ModelOutput(raw_text=response, metadata={"call_index": self.calls})
 
 
 def test_prompt_renderer_contains_required_fields() -> None:
@@ -147,3 +174,223 @@ def test_rollout_records_step_when_model_backend_raises() -> None:
     assert step["final_tag_parse"]["status"] == "missing_tag"
     assert step["action_validation"]["failure_reason"] == "parse_failure"
     assert "simulated backend failure" in step["metadata"]["model_error"]
+
+
+def test_rollout_progress_callback_reports_episode_step_elapsed_and_eta() -> None:
+    instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
+    backend = LocalDeterministicModelBackend()
+    runner = ZeroShotRolloutRunner(
+        model_backend=backend,
+        config=ZeroShotRolloutConfig(
+            start_node_policy="fixed",
+            fixed_start_node=1,
+            rollout_step_policy="node_count_minus_2",
+            auto_complete_last_node=True,
+            enable_solver_completion=False,
+        ),
+        solver=None,
+    )
+
+    updates: list[RolloutProgressUpdate] = []
+    runner.run_episodes(
+        instance=instance,
+        num_episodes=2,
+        episode_id_prefix="episode_progress",
+        episode_index_offset=3,
+        total_episodes=7,
+        progress_callback=updates.append,
+    )
+
+    # 5-node instance with node_count_minus_2 policy produces 3 model-predicted steps per episode.
+    assert len(updates) == 6
+    assert updates[0].episode_index == 4
+    assert updates[0].total_episodes == 7
+    assert updates[0].step_index == 1
+    assert updates[0].expected_steps == 3
+    assert updates[0].node_count == 5
+    assert updates[0].step_attempt == 1
+    assert updates[0].step_retry_count == 0
+    assert updates[0].max_step_retries == 0
+    assert updates[-1].episode_index == 5
+    assert updates[-1].step_index == 3
+
+
+def test_step_retry_parse_failure_then_success() -> None:
+    instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
+    initial_state = load_rollout_state(FIXTURES_DIR / "rollout_state_prefix3.json")
+    backend = _SequenceBackend(
+        [
+            "Reasoning without final tag.",
+            "Valid reasoning.\n\n<FINAL_NEXT_NODE>4</FINAL_NEXT_NODE>",
+        ]
+    )
+    runner = ZeroShotRolloutRunner(
+        model_backend=backend,  # type: ignore[arg-type]
+        config=ZeroShotRolloutConfig(
+            rollout_step_policy="fixed",
+            fixed_prediction_steps=1,
+            auto_complete_last_node=True,
+            enable_solver_completion=False,
+            max_step_retries=1,
+            retry_on_parse_failure=True,
+            retry_on_provider_error=False,
+            retry_backoff_seconds=0.0,
+        ),
+        solver=None,
+    )
+    episode = runner.run_episode(instance=instance, episode_id="episode_retry_parse_success", initial_state=initial_state)
+
+    assert episode["status"] == "success"
+    assert backend.calls == 2
+    step = episode["step_logs"][0]
+    retry = step["metadata"]["retry"]
+    assert retry["attempts_made"] == 2
+    assert retry["succeeded_on_attempt"] == 2
+    assert retry["failed_attempts"][0]["kind"] == "parse_failure"
+    assert retry["failed_attempts"][0]["parse_status"] == "missing_tag"
+    assert episode["metadata"]["parse_retries_used"] == 1
+
+
+def test_step_retry_parse_failure_exhausted() -> None:
+    instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
+    initial_state = load_rollout_state(FIXTURES_DIR / "rollout_state_prefix3.json")
+    backend = _SequenceBackend(
+        [
+            "Missing final tag in attempt one.",
+            "Still missing final tag in attempt two.",
+        ]
+    )
+    runner = ZeroShotRolloutRunner(
+        model_backend=backend,  # type: ignore[arg-type]
+        config=ZeroShotRolloutConfig(
+            rollout_step_policy="fixed",
+            fixed_prediction_steps=1,
+            auto_complete_last_node=True,
+            enable_solver_completion=False,
+            max_step_retries=1,
+            retry_on_parse_failure=True,
+            retry_on_provider_error=False,
+            retry_backoff_seconds=0.0,
+        ),
+        solver=None,
+    )
+    episode = runner.run_episode(instance=instance, episode_id="episode_retry_parse_exhausted", initial_state=initial_state)
+
+    assert episode["status"] == "failed_parse"
+    assert backend.calls == 2
+    step = episode["step_logs"][0]
+    assert step["final_tag_parse"]["status"] == "missing_tag"
+    retry = step["metadata"]["retry"]
+    assert retry["attempts_made"] == 2
+    assert retry["succeeded_on_attempt"] is None
+    assert len(retry["failed_attempts"]) == 2
+    assert retry["failed_attempts"][0]["retryable"] is True
+    assert retry["failed_attempts"][1]["retryable"] is False
+
+
+def test_step_retry_provider_error_then_success() -> None:
+    instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
+    initial_state = load_rollout_state(FIXTURES_DIR / "rollout_state_prefix3.json")
+    backend = _SequenceBackend(
+        [
+            DMXAPIBackendError("gateway timeout", metadata={"http_status": 504}),
+            "Valid reasoning.\n\n<FINAL_NEXT_NODE>4</FINAL_NEXT_NODE>",
+        ]
+    )
+    runner = ZeroShotRolloutRunner(
+        model_backend=backend,  # type: ignore[arg-type]
+        config=ZeroShotRolloutConfig(
+            rollout_step_policy="fixed",
+            fixed_prediction_steps=1,
+            auto_complete_last_node=True,
+            enable_solver_completion=False,
+            max_step_retries=1,
+            retry_on_parse_failure=True,
+            retry_on_provider_error=True,
+            retry_backoff_seconds=0.0,
+        ),
+        solver=None,
+    )
+    episode = runner.run_episode(instance=instance, episode_id="episode_retry_provider_success", initial_state=initial_state)
+
+    assert episode["status"] == "success"
+    assert backend.calls == 2
+    step = episode["step_logs"][0]
+    retry = step["metadata"]["retry"]
+    assert retry["attempts_made"] == 2
+    assert retry["succeeded_on_attempt"] == 2
+    assert retry["failed_attempts"][0]["kind"] == "provider_error"
+    assert retry["failed_attempts"][0]["provider_retry_reason"] == "http_504"
+    assert episode["metadata"]["provider_retries_used"] == 1
+
+
+def test_step_retry_timeout_error_then_success() -> None:
+    instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
+    initial_state = load_rollout_state(FIXTURES_DIR / "rollout_state_prefix3.json")
+    backend = _SequenceBackend(
+        [
+            TimeoutError("The read operation timed out"),
+            "Valid reasoning.\n\n<FINAL_NEXT_NODE>4</FINAL_NEXT_NODE>",
+        ]
+    )
+    runner = ZeroShotRolloutRunner(
+        model_backend=backend,  # type: ignore[arg-type]
+        config=ZeroShotRolloutConfig(
+            rollout_step_policy="fixed",
+            fixed_prediction_steps=1,
+            auto_complete_last_node=True,
+            enable_solver_completion=False,
+            max_step_retries=1,
+            retry_on_parse_failure=True,
+            retry_on_provider_error=True,
+            retry_backoff_seconds=0.0,
+        ),
+        solver=None,
+    )
+    episode = runner.run_episode(instance=instance, episode_id="episode_retry_timeout_success", initial_state=initial_state)
+
+    assert episode["status"] == "success"
+    assert backend.calls == 2
+    retry = episode["step_logs"][0]["metadata"]["retry"]
+    assert retry["attempts_made"] == 2
+    assert retry["failed_attempts"][0]["provider_retry_reason"] == "timeout"
+    assert retry["succeeded_on_attempt"] == 2
+
+
+def test_retry_progress_update_includes_attempt_indicator() -> None:
+    instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
+    initial_state = load_rollout_state(FIXTURES_DIR / "rollout_state_prefix3.json")
+    backend = _SequenceBackend(
+        [
+            "Missing final tag on first attempt.",
+            "Valid reasoning.\n\n<FINAL_NEXT_NODE>4</FINAL_NEXT_NODE>",
+        ]
+    )
+    runner = ZeroShotRolloutRunner(
+        model_backend=backend,  # type: ignore[arg-type]
+        config=ZeroShotRolloutConfig(
+            rollout_step_policy="fixed",
+            fixed_prediction_steps=1,
+            auto_complete_last_node=True,
+            enable_solver_completion=False,
+            max_step_retries=2,
+            retry_on_parse_failure=True,
+            retry_on_provider_error=False,
+            retry_backoff_seconds=0.0,
+        ),
+        solver=None,
+    )
+
+    updates: list[RolloutProgressUpdate] = []
+    runner.run_episode(
+        instance=instance,
+        episode_id="episode_retry_progress",
+        initial_state=initial_state,
+        progress_callback=updates.append,
+    )
+
+    assert len(updates) == 1
+    assert updates[0].step_index == 1
+    assert updates[0].step_attempt == 2
+    assert updates[0].step_retry_count == 1
+    assert updates[0].max_step_retries == 2

@@ -8,11 +8,36 @@ version = "0.1.0"
 description = "Action-level LLM reasoning and RL research codebase for TSP."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["PyYAML>=6.0"]
+dependencies = []
 
-[project.optional-dependencies]
-dev = ["pytest>=7.0"]
-solver = ["lkh>=2.0.0"]
+[dependency-groups]
+# Base runtime required by current project layers:
+# data/config, LKH integration, rollout core, parsing/logging, SFT trace extraction.
+core = [
+  "PyYAML>=6.0",
+  "lkh>=2.0.0",
+]
+
+# API-based rollout support. Currently stdlib-only at runtime; kept explicit for staged installs.
+api = []
+
+# Local OSS inference path (Phase 3.6b): model download and local-run helpers.
+# Note: vLLM itself is currently run via `uvx`/external environment because
+# `lkh==2.0.0` (required by core) and `vllm` have incompatible `click` pins.
+local-infer = [
+  "huggingface_hub>=0.24.0",
+]
+
+# Future SFT training/tooling stack (trace mining/export is in core).
+sft = []
+
+# Future RL training/integration stack.
+rl = []
+
+# Developer/test utilities.
+dev = [
+  "pytest>=7.0",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -1,0 +1,17 @@
+{
+  "run_name": "sft_fixture_run",
+  "backend": "dmx_openai_compatible",
+  "model_name": "claude-opus-4-6-thinking",
+  "episode_files": [
+    "episodes/sft_episode_valid.json",
+    "episodes/sft_episode_invalid.json"
+  ],
+  "metrics": {
+    "total_episodes": 2
+  },
+  "config": {
+    "api": {
+      "model_id": "claude-opus-4-6-thinking"
+    }
+  }
+}

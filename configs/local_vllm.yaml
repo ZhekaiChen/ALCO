@@ -1,0 +1,23 @@
+# Local vLLM model/storage/serving defaults for Phase 3.6b.
+
+model:
+  hf_model_id: Qwen/Qwen3-30B-A3B-Thinking-2507
+  model_store_root: /mnt/zc/models
+  # Default resolved local path used by helper scripts.
+  model_path: /mnt/zc/models/Qwen/Qwen3-30B-A3B-Thinking-2507
+  hf_token_env: HF_TOKEN
+  revision: null
+
+serving:
+  host: 127.0.0.1
+  port: 8000
+  base_url: http://127.0.0.1:8000/v1
+  endpoint_path: /chat/completions
+  served_model_name: Qwen/Qwen3-30B-A3B-Thinking-2507
+  # Single-node multi-GPU first path for this project.
+  tensor_parallel_size: 8
+  dtype: auto
+  gpu_memory_utilization: null
+  # Set an explicit safe default for this host/GPU; 262144 may fail KV-cache fit.
+  max_model_len: 32768
+  api_key_env: LOCAL_VLLM_API_KEY

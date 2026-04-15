@@ -11,7 +11,13 @@ from io import BytesIO
 import pytest
 
 from tsp_action_rl.data import build_initial_rollout_state, load_tsp_instance
-from tsp_action_rl.inference import DMXAPIBackendError, DMXOpenAICompatibleBackend, DmxOpenAICompatibleConfig
+from tsp_action_rl.inference import (
+    DMXAPIBackendError,
+    DMXOpenAICompatibleBackend,
+    DmxOpenAICompatibleConfig,
+    build_model_backend,
+    supported_backends,
+)
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
@@ -180,3 +186,143 @@ def test_dmx_backend_http_error_includes_status_and_error_body(tmp_path: Path, m
     payload = json.loads(debug_path.read_text(encoding="utf-8"))
     assert payload["failure"]["http_status"] == 504
     assert "timeout" in payload["failure"]["http_error_body"]
+
+
+def test_local_vllm_backend_uses_openai_compatible_path_without_required_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
+    state = build_initial_rollout_state(instance, start_node=1)
+    monkeypatch.delenv("LOCAL_VLLM_API_KEY", raising=False)
+
+    captured: dict[str, Any] = {}
+
+    def _fake_urlopen(req, timeout):  # type: ignore[no-untyped-def]
+        captured["url"] = req.full_url
+        captured["timeout"] = timeout
+        captured["headers"] = {k.lower(): v for k, v in req.headers.items()}
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeHTTPResponse(
+            {
+                "id": "resp_local_vllm",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "Reasoning local.\n\n<FINAL_NEXT_NODE>3</FINAL_NEXT_NODE>"},
+                    }
+                ],
+                "usage": {"input_tokens": 10, "output_tokens": 8},
+            }
+        )
+
+    monkeypatch.setattr("tsp_action_rl.inference.backends.urllib_request.urlopen", _fake_urlopen)
+
+    backend = build_model_backend(
+        backend="local_vllm_openai_compatible",
+        model_name="Qwen/Qwen3-30B-A3B-Thinking-2507",
+        api_config={
+            "base_url": "http://127.0.0.1:8000/v1",
+            "endpoint_path": "/chat/completions",
+            "model_id": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+            "local_model_path": "/mnt/zc/models/Qwen/Qwen3-30B-A3B-Thinking-2507",
+            "served_model_name": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+            "server_host": "127.0.0.1",
+            "server_port": 8000,
+        },
+    )
+    output = backend.generate("prompt", instance=instance, state=state)
+
+    assert captured["url"] == "http://127.0.0.1:8000/v1/chat/completions"
+    assert "authorization" not in captured["headers"]
+    assert captured["body"]["model"] == "Qwen/Qwen3-30B-A3B-Thinking-2507"
+    assert "reasoning_effort" not in captured["body"]
+
+    assert output.metadata["backend"] == "local_vllm_openai_compatible"
+    assert output.metadata["provider"] == "local_vllm"
+    assert output.metadata["served_model_name"] == "Qwen/Qwen3-30B-A3B-Thinking-2507"
+    assert output.metadata["local_model_path"] == "/mnt/zc/models/Qwen/Qwen3-30B-A3B-Thinking-2507"
+    assert output.metadata["server_host"] == "127.0.0.1"
+    assert output.metadata["server_port"] == 8000
+    assert isinstance(output.metadata["latency_seconds"], float)
+    assert output.metadata["latency_seconds"] >= 0.0
+
+
+def test_supported_backends_includes_local_vllm_openai_compatible() -> None:
+    assert "local_vllm_openai_compatible" in supported_backends()
+
+
+def test_dmx_profile_glm_shapes_request_without_reasoning_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
+    state = build_initial_rollout_state(instance, start_node=1)
+    monkeypatch.setenv("DMXAPI_BASE_URL", "https://dmx.example/v1")
+    monkeypatch.setenv("DMXAPI_API_KEY", "test-key")
+
+    captured: dict[str, Any] = {}
+
+    def _fake_urlopen(req, timeout):  # type: ignore[no-untyped-def]
+        captured["timeout"] = timeout
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeHTTPResponse(
+            {
+                "id": "resp_profile_glm",
+                "choices": [{"message": {"content": "reasoning\n<FINAL_NEXT_NODE>3</FINAL_NEXT_NODE>"}}],
+            }
+        )
+
+    monkeypatch.setattr("tsp_action_rl.inference.backends.urllib_request.urlopen", _fake_urlopen)
+
+    backend = build_model_backend(
+        backend="dmx_openai_compatible",
+        model_name="",
+        api_config={"model_profile": "glm-5.1"},
+    )
+    output = backend.generate("prompt", instance=instance, state=state)
+
+    assert captured["body"]["model"] == "glm-5.1"
+    assert "reasoning_effort" not in captured["body"]
+    assert output.metadata["model_profile"] == "glm-5.1"
+    assert captured["timeout"] == 180
+
+
+def test_dmx_profile_request_omit_fields_applies_after_extra_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
+    state = build_initial_rollout_state(instance, start_node=1)
+    monkeypatch.setenv("DMXAPI_BASE_URL", "https://dmx.example/v1")
+    monkeypatch.setenv("DMXAPI_API_KEY", "test-key")
+
+    captured: dict[str, Any] = {}
+
+    def _fake_urlopen(req, timeout):  # type: ignore[no-untyped-def]
+        captured["timeout"] = timeout
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeHTTPResponse(
+            {
+                "id": "resp_profile_gpt",
+                "choices": [{"message": {"content": "reasoning\n<FINAL_NEXT_NODE>4</FINAL_NEXT_NODE>"}}],
+            }
+        )
+
+    monkeypatch.setattr("tsp_action_rl.inference.backends.urllib_request.urlopen", _fake_urlopen)
+
+    backend = build_model_backend(
+        backend="dmx_openai_compatible",
+        model_name="",
+        api_config={
+            "model_profile": "gpt-5.4",
+            "omit_request_fields": ["temperature", "top_p"],
+            "extra_body": {"temperature": 0.9, "top_p": 0.8, "custom_field": "value"},
+        },
+    )
+    output = backend.generate("prompt", instance=instance, state=state)
+
+    assert captured["body"]["model"] == "gpt-5.4"
+    assert "temperature" not in captured["body"]
+    assert "top_p" not in captured["body"]
+    assert captured["body"]["custom_field"] == "value"
+    assert captured["body"]["reasoning_effort"] == "high"
+    assert output.metadata["generation_settings"]["omit_request_fields"] == ["temperature", "top_p"]
+
+
+def test_dmx_profile_rejects_unknown_profile() -> None:
+    with pytest.raises(ValueError, match="Unsupported api_config.model_profile"):
+        DmxOpenAICompatibleConfig.from_mapping({"model_profile": "unknown-model-profile"})

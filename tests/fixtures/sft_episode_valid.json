@@ -1,0 +1,65 @@
+{
+  "episode_id": "sft_episode_valid",
+  "instance_id": "tsp_fixture_10",
+  "status": "success",
+  "node_count": 10,
+  "initial_state": {
+    "partial_route": [1]
+  },
+  "final_route": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "step_logs": [
+    {
+      "instance_id": "tsp_fixture_10",
+      "episode_id": "sft_episode_valid",
+      "step_index": 1,
+      "prompt_text": "Prompt for step 1",
+      "raw_model_output": "Reason about route globally.\n\n<FINAL_NEXT_NODE>2</FINAL_NEXT_NODE>",
+      "reasoning_text": "Reason about route globally.",
+      "final_tag_parse": {
+        "status": "success",
+        "tag_count": 1,
+        "parsed_next_node": 2
+      },
+      "action_validation": {
+        "is_valid": true,
+        "failure_reason": null
+      },
+      "reward_signal": {
+        "reward_mode": "phase3_zero_shot_placeholder",
+        "reward_value": 0.0,
+        "components": {
+          "reference_tour_length": 100.0,
+          "constrained_tour_length": 102.0,
+          "gap_to_reference": 0.02
+        }
+      },
+      "solver_completion": {
+        "status": "success",
+        "constrained_tour": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        "constrained_tour_length": 102.0,
+        "reference_tour_length": 100.0,
+        "debug_paths": {}
+      },
+      "state_before": {
+        "node_count": 10
+      },
+      "state_after": {
+        "node_count": 10
+      },
+      "metadata": {
+        "model_name": "claude-opus-4-6-thinking",
+        "model_id": "claude-opus-4-6-thinking"
+      }
+    }
+  ],
+  "summary_metrics": {
+    "num_steps": 1,
+    "parse_success_rate": 1.0,
+    "valid_action_rate": 1.0,
+    "total_reward": 0.0,
+    "final_gap_to_reference": 0.01
+  },
+  "metadata": {
+    "model_name": "claude-opus-4-6-thinking"
+  }
+}

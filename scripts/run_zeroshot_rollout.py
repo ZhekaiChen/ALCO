@@ -14,8 +14,13 @@ import yaml
 
 from tsp_action_rl.config import load_lkh_settings
 from tsp_action_rl.data import TSPInstance, generate_random_euclidean_instance, load_tsp_instance, save_tsp_instance
-from tsp_action_rl.inference import build_model_backend, supported_backends
-from tsp_action_rl.rollout import ZeroShotRolloutConfig, ZeroShotRolloutRunner, save_json
+from tsp_action_rl.inference import (
+    DmxOpenAICompatibleConfig,
+    available_dmx_model_profiles,
+    build_model_backend,
+    supported_backends,
+)
+from tsp_action_rl.rollout import RolloutProgressUpdate, ZeroShotRolloutConfig, ZeroShotRolloutRunner, save_json
 from tsp_action_rl.solvers import LKHIntegration
 
 
@@ -57,6 +62,12 @@ def _parse_node_counts(raw: Any) -> list[int]:
     if not parsed:
         raise ValueError("node_counts must not be empty.")
     return parsed
+
+
+def _parse_csv_fields(raw: str | None) -> list[str]:
+    if raw is None:
+        return []
+    return [chunk.strip() for chunk in raw.split(",") if chunk.strip()]
 
 
 def _resolve_api_defaults(defaults: Mapping[str, Any]) -> dict[str, Any]:
@@ -119,20 +130,35 @@ def _build_arg_parser(defaults: dict[str, Any]) -> argparse.ArgumentParser:
     parser.add_argument("--api-key-env", type=str, default=api_defaults.get("api_key_env", "DMXAPI_API_KEY"))
     parser.add_argument("--api-endpoint-path", type=str, default=api_defaults.get("endpoint_path", "/chat/completions"))
     parser.add_argument(
+        "--api-model-profile",
+        type=str,
+        default=None,
+        help=(
+            "Named DMX request-shaping profile "
+            f"(supported: {', '.join(available_dmx_model_profiles())})."
+        ),
+    )
+    parser.add_argument(
         "--api-model-id",
         type=str,
-        default=api_defaults.get("model_id", "claude-opus-4-6-thinking"),
+        default=None,
     )
-    parser.add_argument("--api-thinking-effort", type=str, default=api_defaults.get("thinking_effort", "high"))
+    parser.add_argument("--api-thinking-effort", type=str, default=None)
     parser.add_argument(
         "--api-thinking-effort-field",
         type=str,
-        default=api_defaults.get("thinking_effort_field", "reasoning_effort"),
+        default=None,
     )
     parser.add_argument("--api-max-tokens", type=int, default=int(api_defaults.get("max_tokens", 4096)))
     parser.add_argument("--api-temperature", type=float, default=float(api_defaults.get("temperature", 0.2)))
     parser.add_argument("--api-top-p", type=float, default=float(api_defaults.get("top_p", 1.0)))
-    parser.add_argument("--api-timeout-seconds", type=int, default=int(api_defaults.get("timeout_seconds", 180)))
+    parser.add_argument("--api-timeout-seconds", type=int, default=None)
+    parser.add_argument(
+        "--api-omit-request-fields",
+        type=str,
+        default=None,
+        help="Comma-separated request body fields to omit (applied after profile + extra_body merge).",
+    )
     parser.add_argument(
         "--api-debug-enabled",
         action=argparse.BooleanOptionalAction,
@@ -188,6 +214,18 @@ def _build_arg_parser(defaults: dict[str, Any]) -> argparse.ArgumentParser:
         default=bool(defaults.get("close_tour_to_start", True)),
     )
     parser.add_argument("--max-steps", type=int, default=defaults.get("max_steps"))
+    parser.add_argument("--max-step-retries", type=int, default=int(defaults.get("max_step_retries", 0)))
+    parser.add_argument(
+        "--retry-on-parse-failure",
+        action=argparse.BooleanOptionalAction,
+        default=bool(defaults.get("retry_on_parse_failure", True)),
+    )
+    parser.add_argument(
+        "--retry-on-provider-error",
+        action=argparse.BooleanOptionalAction,
+        default=bool(defaults.get("retry_on_provider_error", False)),
+    )
+    parser.add_argument("--retry-backoff-seconds", type=float, default=float(defaults.get("retry_backoff_seconds", 0.0)))
 
     parser.add_argument(
         "--enable-solver-completion",
@@ -198,6 +236,12 @@ def _build_arg_parser(defaults: dict[str, Any]) -> argparse.ArgumentParser:
 
     parser.add_argument("--output-root", type=Path, default=Path(defaults.get("output_root", "outputs/zeroshot")))
     parser.add_argument("--run-name", type=str, default=defaults.get("run_name"))
+    parser.add_argument(
+        "--show-progress",
+        action=argparse.BooleanOptionalAction,
+        default=bool(defaults.get("show_progress", True)),
+        help="Print operator-facing progress line for each rollout step.",
+    )
     return parser
 
 
@@ -209,13 +253,9 @@ def _build_api_config(args: argparse.Namespace, defaults: Mapping[str, Any]) -> 
             "base_url_env": args.api_base_url_env,
             "api_key_env": args.api_key_env,
             "endpoint_path": args.api_endpoint_path,
-            "model_id": args.api_model_id,
-            "thinking_effort": args.api_thinking_effort,
-            "thinking_effort_field": args.api_thinking_effort_field,
             "max_tokens": args.api_max_tokens,
             "temperature": args.api_temperature,
             "top_p": args.api_top_p,
-            "timeout_seconds": args.api_timeout_seconds,
             "debug": {
                 "enabled": args.api_debug_enabled,
                 "output_root": args.api_debug_output_root,
@@ -223,6 +263,24 @@ def _build_api_config(args: argparse.Namespace, defaults: Mapping[str, Any]) -> 
             },
         }
     )
+    if args.api_model_profile is not None:
+        api_defaults["model_profile"] = args.api_model_profile
+        if args.api_model_id is None:
+            api_defaults.pop("model_id", None)
+        if args.api_thinking_effort is None:
+            api_defaults.pop("thinking_effort", None)
+        if args.api_thinking_effort_field is None:
+            api_defaults.pop("thinking_effort_field", None)
+    if args.api_model_id is not None:
+        api_defaults["model_id"] = args.api_model_id
+    if args.api_thinking_effort is not None:
+        api_defaults["thinking_effort"] = args.api_thinking_effort
+    if args.api_thinking_effort_field is not None:
+        api_defaults["thinking_effort_field"] = args.api_thinking_effort_field
+    if args.api_timeout_seconds is not None:
+        api_defaults["timeout_seconds"] = args.api_timeout_seconds
+    if args.api_omit_request_fields is not None:
+        api_defaults["omit_request_fields"] = _parse_csv_fields(args.api_omit_request_fields)
     return dict(api_defaults)
 
 
@@ -230,7 +288,9 @@ def _resolve_model_name(backend: str, explicit_model_name: str | None, api_confi
     if explicit_model_name is not None and explicit_model_name.strip():
         return explicit_model_name.strip()
     if backend == "dmx_openai_compatible":
-        return str(api_config.get("model_id", "claude-opus-4-6-thinking"))
+        return DmxOpenAICompatibleConfig.from_mapping(api_config).model_id
+    if backend == "local_vllm_openai_compatible":
+        return DmxOpenAICompatibleConfig.from_mapping(api_config).model_id
     if backend == "local_deterministic":
         return "local-deterministic-nearest-neighbor"
     if backend == "local_static":
@@ -289,6 +349,9 @@ def _summarize_episodes(episode_logs: list[dict[str, Any]]) -> dict[str, Any]:
             "avg_parse_success_rate": 0.0,
             "avg_valid_action_rate": 0.0,
             "avg_final_gap_to_reference": None,
+            "total_step_retries": 0,
+            "total_step_attempts": 0,
+            "episodes_with_retries": 0,
         }
 
     status_counts = Counter(log["status"] for log in episode_logs)
@@ -300,6 +363,11 @@ def _summarize_episodes(episode_logs: list[dict[str, Any]]) -> dict[str, Any]:
         if log["summary_metrics"]["final_gap_to_reference"] is not None
     ]
     gap_avg = None if not final_gaps else sum(float(v) for v in final_gaps) / len(final_gaps)
+    total_step_retries = sum(int(log.get("metadata", {}).get("total_step_retries", 0)) for log in episode_logs)
+    total_step_attempts = sum(int(log.get("metadata", {}).get("total_step_attempts", 0)) for log in episode_logs)
+    episodes_with_retries = sum(
+        1 for log in episode_logs if int(log.get("metadata", {}).get("steps_with_retries", 0)) > 0
+    )
 
     return {
         "total_episodes": len(episode_logs),
@@ -307,7 +375,17 @@ def _summarize_episodes(episode_logs: list[dict[str, Any]]) -> dict[str, Any]:
         "avg_parse_success_rate": parse_avg,
         "avg_valid_action_rate": valid_avg,
         "avg_final_gap_to_reference": gap_avg,
+        "total_step_retries": total_step_retries,
+        "total_step_attempts": total_step_attempts,
+        "episodes_with_retries": episodes_with_retries,
     }
+
+
+def _format_duration(total_seconds: float) -> str:
+    seconds = max(int(total_seconds), 0)
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 def main() -> None:
@@ -320,6 +398,7 @@ def main() -> None:
 
     instances, instance_specs, generated = _load_instances(args)
     api_config = _build_api_config(args, defaults)
+    resolved_api_config = DmxOpenAICompatibleConfig.from_mapping(api_config)
     resolved_model_name = _resolve_model_name(args.backend, args.model_name, api_config)
 
     backend = build_model_backend(
@@ -342,6 +421,10 @@ def main() -> None:
         close_tour_to_start=args.close_tour_to_start,
         random_seed=args.random_seed,
         max_steps=args.max_steps,
+        max_step_retries=args.max_step_retries,
+        retry_on_parse_failure=args.retry_on_parse_failure,
+        retry_on_provider_error=args.retry_on_provider_error,
+        retry_backoff_seconds=args.retry_backoff_seconds,
         enable_solver_completion=args.enable_solver_completion,
         include_current_position=args.include_current_position,
         include_visited_nodes=args.include_visited_nodes,
@@ -360,6 +443,33 @@ def main() -> None:
     all_episode_logs: list[dict[str, Any]] = []
     episode_files: list[str] = []
     saved_instance_files: list[str] = []
+    total_episodes_planned = len(instances) * args.episodes_per_instance
+    episode_index_offset = 0
+
+    progress_callback = None
+    if args.show_progress:
+
+        def _on_progress(update: RolloutProgressUpdate) -> None:
+            elapsed_text = _format_duration(update.elapsed_seconds)
+            eta_text = _format_duration(update.eta_seconds)
+            attempt_text = f"attempt {update.step_attempt}/{update.max_step_retries + 1}"
+            retry_text = (
+                f" retry {update.step_retry_count}/{update.max_step_retries}"
+                if update.step_retry_count > 0 and update.max_step_retries > 0
+                else ""
+            )
+            print(
+                (
+                    f"[progress] episode {update.episode_index}/{update.total_episodes} "
+                    f"step {update.step_index}/{update.expected_steps} "
+                    f"{attempt_text}{retry_text} "
+                    f"node_count={update.node_count} "
+                    f"elapsed={elapsed_text} eta={eta_text}"
+                ),
+                flush=True,
+            )
+
+        progress_callback = _on_progress
 
     for instance in instances:
         if generated and args.save_generated_instances:
@@ -371,7 +481,11 @@ def main() -> None:
             instance=instance,
             num_episodes=args.episodes_per_instance,
             episode_id_prefix=f"{run_name}_{instance.instance_id}",
+            episode_index_offset=episode_index_offset,
+            total_episodes=total_episodes_planned,
+            progress_callback=progress_callback,
         )
+        episode_index_offset += args.episodes_per_instance
         for episode_log in episode_logs:
             episode_path = episodes_dir / f"{episode_log['episode_id']}.json"
             save_json(episode_log, episode_path)
@@ -406,6 +520,10 @@ def main() -> None:
             "auto_complete_last_node": args.auto_complete_last_node,
             "close_tour_to_start": args.close_tour_to_start,
             "max_steps": args.max_steps,
+            "max_step_retries": args.max_step_retries,
+            "retry_on_parse_failure": args.retry_on_parse_failure,
+            "retry_on_provider_error": args.retry_on_provider_error,
+            "retry_backoff_seconds": args.retry_backoff_seconds,
             "enable_solver_completion": args.enable_solver_completion,
             "lkh_config": str(args.lkh_config),
             "api": {
@@ -413,13 +531,23 @@ def main() -> None:
                 "base_url_env": args.api_base_url_env,
                 "api_key_env": args.api_key_env,
                 "endpoint_path": args.api_endpoint_path,
-                "model_id": args.api_model_id,
-                "thinking_effort": args.api_thinking_effort,
-                "thinking_effort_field": args.api_thinking_effort_field,
+                "model_profile": resolved_api_config.model_profile,
+                "model_id": resolved_api_config.model_id,
+                "require_api_key": bool(api_config.get("require_api_key", True)),
+                "thinking_effort": resolved_api_config.thinking_effort,
+                "thinking_effort_field": resolved_api_config.thinking_effort_field,
                 "max_tokens": args.api_max_tokens,
                 "temperature": args.api_temperature,
                 "top_p": args.api_top_p,
-                "timeout_seconds": args.api_timeout_seconds,
+                "timeout_seconds": resolved_api_config.timeout_seconds,
+                "omit_request_fields": list(resolved_api_config.omit_request_fields),
+                "provider_name": api_config.get("provider_name"),
+                "backend_name": api_config.get("backend_name"),
+                "local_model_path": api_config.get("local_model_path"),
+                "served_model_name": api_config.get("served_model_name"),
+                "server_host": api_config.get("server_host"),
+                "server_port": api_config.get("server_port"),
+                "server_tensor_parallel_size": api_config.get("server_tensor_parallel_size"),
                 "debug": {
                     "enabled": args.api_debug_enabled,
                     "output_root": args.api_debug_output_root,
@@ -429,6 +557,7 @@ def main() -> None:
             "include_current_position": args.include_current_position,
             "include_visited_nodes": args.include_visited_nodes,
             "include_unvisited_nodes": args.include_unvisited_nodes,
+            "show_progress": args.show_progress,
         },
     }
     summary_path = save_json(run_summary, run_dir / "run_summary.json")

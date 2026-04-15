@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from tsp_action_rl.data import Position2D, RolloutState, TSPInstance, build_initial_rollout_state
 from tsp_action_rl.inference import ModelBackend
@@ -41,6 +42,30 @@ class ZeroShotRolloutConfig:
     include_current_position: bool = True
     include_visited_nodes: bool = False
     include_unvisited_nodes: bool = True
+    max_step_retries: int = 0
+    retry_on_parse_failure: bool = True
+    retry_on_provider_error: bool = False
+    retry_backoff_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
+class RolloutProgressUpdate:
+    """Operator-facing per-step progress snapshot."""
+
+    episode_id: str
+    episode_index: int
+    total_episodes: int
+    step_index: int
+    expected_steps: int
+    node_count: int
+    elapsed_seconds: float
+    eta_seconds: float
+    step_attempt: int
+    step_retry_count: int
+    max_step_retries: int
+
+
+ProgressCallback = Callable[[RolloutProgressUpdate], None]
 
 
 class ZeroShotRolloutRunner:
@@ -62,6 +87,10 @@ class ZeroShotRolloutRunner:
         if config.rollout_step_policy == "fixed":
             if config.fixed_prediction_steps is None or config.fixed_prediction_steps < 0:
                 raise ValueError("fixed_prediction_steps must be >= 0 when rollout_step_policy='fixed'.")
+        if config.max_step_retries < 0:
+            raise ValueError("max_step_retries must be >= 0.")
+        if config.retry_backoff_seconds < 0:
+            raise ValueError("retry_backoff_seconds must be >= 0.")
 
         self.model_backend = model_backend
         self.config = config
@@ -79,15 +108,28 @@ class ZeroShotRolloutRunner:
         instance: TSPInstance,
         episode_id: str,
         initial_state: RolloutState | None = None,
+        episode_index: int = 1,
+        total_episodes: int = 1,
+        progress_callback: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         state = initial_state or build_initial_rollout_state(instance, start_node=self._choose_start_node(instance))
         initial_state_payload = state.to_dict()
         prediction_budget = self._resolve_prediction_budget(node_count=instance.node_count)
+        expected_steps_for_progress = self._resolve_expected_steps_for_progress(
+            initial_state=state,
+            prediction_budget=prediction_budget,
+        )
+        episode_start_monotonic = time.monotonic()
         prediction_steps_used = 0
         auto_completed_nodes: list[int] = []
 
         parse_successes = 0
         valid_actions = 0
+        total_step_attempts = 0
+        total_step_retries = 0
+        steps_with_retries = 0
+        parse_retry_count = 0
+        provider_retry_count = 0
         step_logs: list[dict[str, Any]] = []
         final_route: list[int] | None = None
         latest_constrained_tour_length: float | None = None
@@ -129,54 +171,142 @@ class ZeroShotRolloutRunner:
                 break
 
             prompt_text = render_tsp_next_node_prompt(instance=instance, state=state, config=self.prompt_config)
-            try:
-                model_output = self.model_backend.generate(prompt_text, instance=instance, state=state)
-            except Exception as exc:  # noqa: BLE001
-                step_logs.append(
-                    {
-                        "instance_id": instance.instance_id,
-                        "episode_id": episode_id,
-                        "step_index": state.step_index,
-                        "prompt_text": prompt_text,
-                        "raw_model_output": "",
-                        "reasoning_text": "",
-                        "final_tag_parse": {
-                            "status": "missing_tag",
-                            "tag_count": 0,
-                            "parsed_next_node": None,
-                        },
-                        "action_validation": {
-                            "is_valid": False,
-                            "failure_reason": "parse_failure",
-                        },
-                        "reward_signal": {
-                            "reward_mode": "phase3_zero_shot_placeholder",
-                            "reward_value": 0.0,
-                            "components": {"reference_tour_length": reference_tour_length},
-                        },
-                        "solver_completion": {
-                            "status": "skipped",
-                            "constrained_tour": None,
-                            "constrained_tour_length": None,
-                            "reference_tour_length": reference_tour_length,
-                            "debug_paths": {},
-                        },
-                        "state_before": state.to_dict(),
-                        "state_after": None,
-                        "metadata": self._build_model_exception_metadata(exc),
-                    }
-                )
-                episode_status = "failed_other"
+            attempts_made = 0
+            failed_attempts: list[dict[str, Any]] = []
+            step_failed_due_to_provider_error = False
+            model_output = None
+            parse = None
+            action_validation = None
+
+            while True:
+                attempts_made += 1
+                has_retries_remaining = attempts_made <= self.config.max_step_retries
+                try:
+                    model_output = self.model_backend.generate(prompt_text, instance=instance, state=state)
+                except Exception as exc:  # noqa: BLE001
+                    provider_retry_reason = self._provider_retry_reason(exc)
+                    can_retry_provider = (
+                        self.config.retry_on_provider_error
+                        and provider_retry_reason is not None
+                        and has_retries_remaining
+                    )
+                    failed_attempts.append(
+                        {
+                            "attempt_index": attempts_made,
+                            "kind": "provider_error",
+                            "retryable": can_retry_provider,
+                            "provider_retry_reason": provider_retry_reason,
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                            "error_metadata": self._extract_exception_metadata(exc),
+                        }
+                    )
+                    if can_retry_provider:
+                        provider_retry_count += 1
+                        if self.config.retry_backoff_seconds > 0:
+                            time.sleep(self.config.retry_backoff_seconds)
+                        continue
+
+                    step_metadata = self._build_model_exception_metadata(exc)
+                    step_metadata["retry"] = self._build_retry_metadata(
+                        attempts_made=attempts_made,
+                        failed_attempts=failed_attempts,
+                        succeeded_on_attempt=None,
+                    )
+                    step_logs.append(
+                        {
+                            "instance_id": instance.instance_id,
+                            "episode_id": episode_id,
+                            "step_index": state.step_index,
+                            "prompt_text": prompt_text,
+                            "raw_model_output": "",
+                            "reasoning_text": "",
+                            "final_tag_parse": {
+                                "status": "missing_tag",
+                                "tag_count": 0,
+                                "parsed_next_node": None,
+                            },
+                            "action_validation": {
+                                "is_valid": False,
+                                "failure_reason": "parse_failure",
+                            },
+                            "reward_signal": {
+                                "reward_mode": "phase3_zero_shot_placeholder",
+                                "reward_value": 0.0,
+                                "components": {"reference_tour_length": reference_tour_length},
+                            },
+                            "solver_completion": {
+                                "status": "skipped",
+                                "constrained_tour": None,
+                                "constrained_tour_length": None,
+                                "reference_tour_length": reference_tour_length,
+                                "debug_paths": {},
+                            },
+                            "state_before": state.to_dict(),
+                            "state_after": None,
+                            "metadata": step_metadata,
+                        }
+                    )
+                    total_step_attempts += attempts_made
+                    total_step_retries += max(attempts_made - 1, 0)
+                    if attempts_made > 1:
+                        steps_with_retries += 1
+                    episode_status = "failed_other"
+                    step_failed_due_to_provider_error = True
+                    break
+
+                assert model_output is not None
+                parse = parse_final_next_node(model_output.raw_text)
+                action_validation = self._validate_action(state=state, parse=parse)
+
+                if parse.status != "success":
+                    can_retry_parse_failure = (
+                        self.config.retry_on_parse_failure
+                        and parse.status in {"missing_tag", "multiple_tags", "malformed_tag"}
+                        and has_retries_remaining
+                    )
+                    failed_attempts.append(
+                        {
+                            "attempt_index": attempts_made,
+                            "kind": "parse_failure",
+                            "retryable": can_retry_parse_failure,
+                            "parse_status": parse.status,
+                            "tag_count": parse.tag_count,
+                        }
+                    )
+                    if can_retry_parse_failure:
+                        parse_retry_count += 1
+                        if self.config.retry_backoff_seconds > 0:
+                            time.sleep(self.config.retry_backoff_seconds)
+                        continue
                 break
 
+            if step_failed_due_to_provider_error:
+                break
+
+            assert model_output is not None
+            assert parse is not None
+            assert action_validation is not None
+
             prediction_steps_used += 1
-            parse = parse_final_next_node(model_output.raw_text)
+            total_step_attempts += attempts_made
+            total_step_retries += max(attempts_made - 1, 0)
+            if attempts_made > 1:
+                steps_with_retries += 1
+
             if parse.status == "success":
                 parse_successes += 1
-
-            action_validation = self._validate_action(state=state, parse=parse)
             if action_validation.is_valid:
                 valid_actions += 1
+            elif parse.status == "success":
+                failed_attempts.append(
+                    {
+                        "attempt_index": attempts_made,
+                        "kind": "action_validation_failure",
+                        "retryable": False,
+                        "failure_reason": action_validation.failure_reason,
+                    }
+                )
 
             reward_signal: dict[str, Any] = {
                 "reward_mode": "phase3_zero_shot_placeholder",
@@ -196,6 +326,11 @@ class ZeroShotRolloutRunner:
                 "model_backend": self.model_backend.backend_type,
             }
             step_metadata.update(model_output.metadata)
+            step_metadata["retry"] = self._build_retry_metadata(
+                attempts_made=attempts_made,
+                failed_attempts=failed_attempts,
+                succeeded_on_attempt=(attempts_made if action_validation.is_valid else None),
+            )
 
             if action_validation.is_valid:
                 assert parse.parsed_next_node is not None
@@ -247,6 +382,30 @@ class ZeroShotRolloutRunner:
                 }
             )
 
+            if progress_callback is not None and expected_steps_for_progress > 0:
+                elapsed_seconds = time.monotonic() - episode_start_monotonic
+                remaining_steps = max(expected_steps_for_progress - prediction_steps_used, 0)
+                eta_seconds = (
+                    0.0
+                    if prediction_steps_used == 0
+                    else (elapsed_seconds / prediction_steps_used) * remaining_steps
+                )
+                progress_callback(
+                    RolloutProgressUpdate(
+                        episode_id=episode_id,
+                        episode_index=episode_index,
+                        total_episodes=total_episodes,
+                        step_index=prediction_steps_used,
+                        expected_steps=expected_steps_for_progress,
+                        node_count=instance.node_count,
+                        elapsed_seconds=elapsed_seconds,
+                        eta_seconds=eta_seconds,
+                        step_attempt=attempts_made,
+                        step_retry_count=max(attempts_made - 1, 0),
+                        max_step_retries=self.config.max_step_retries,
+                    )
+                )
+
             if not action_validation.is_valid:
                 episode_status = "failed_parse" if parse.status != "success" else "failed_invalid_action"
                 break
@@ -283,6 +442,15 @@ class ZeroShotRolloutRunner:
                 "fixed_prediction_steps": self.config.fixed_prediction_steps,
                 "prediction_budget": prediction_budget,
                 "prediction_steps_used": prediction_steps_used,
+                "max_step_retries": self.config.max_step_retries,
+                "retry_on_parse_failure": self.config.retry_on_parse_failure,
+                "retry_on_provider_error": self.config.retry_on_provider_error,
+                "retry_backoff_seconds": self.config.retry_backoff_seconds,
+                "total_step_attempts": total_step_attempts,
+                "total_step_retries": total_step_retries,
+                "steps_with_retries": steps_with_retries,
+                "parse_retries_used": parse_retry_count,
+                "provider_retries_used": provider_retry_count,
                 "auto_complete_last_node": self.config.auto_complete_last_node,
                 "auto_completed_nodes": auto_completed_nodes,
                 "close_tour_to_start": self.config.close_tour_to_start,
@@ -296,13 +464,30 @@ class ZeroShotRolloutRunner:
         instance: TSPInstance,
         num_episodes: int,
         episode_id_prefix: str,
+        episode_index_offset: int = 0,
+        total_episodes: int | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> list[dict[str, Any]]:
         if num_episodes < 1:
             raise ValueError(f"num_episodes must be >= 1, got {num_episodes}.")
+        resolved_total_episodes = total_episodes if total_episodes is not None else num_episodes
+        if resolved_total_episodes < 1:
+            raise ValueError("total_episodes must be >= 1 when provided.")
+        if episode_index_offset < 0:
+            raise ValueError("episode_index_offset must be >= 0.")
+
         logs: list[dict[str, Any]] = []
         for idx in range(1, num_episodes + 1):
             episode_id = f"{episode_id_prefix}_{idx:06d}"
-            logs.append(self.run_episode(instance=instance, episode_id=episode_id))
+            logs.append(
+                self.run_episode(
+                    instance=instance,
+                    episode_id=episode_id,
+                    episode_index=episode_index_offset + idx,
+                    total_episodes=resolved_total_episodes,
+                    progress_callback=progress_callback,
+                )
+            )
         return logs
 
     def _choose_start_node(self, instance: TSPInstance) -> int:
@@ -317,6 +502,20 @@ class ZeroShotRolloutRunner:
             return max(node_count - 2, 0)
         assert self.config.fixed_prediction_steps is not None
         return self.config.fixed_prediction_steps
+
+    def _resolve_expected_steps_for_progress(
+        self,
+        *,
+        initial_state: RolloutState,
+        prediction_budget: int | None,
+    ) -> int:
+        if prediction_budget is not None:
+            expected = prediction_budget
+        else:
+            expected = len(initial_state.unvisited_nodes)
+        if self.config.max_steps is not None:
+            expected = min(expected, self.config.max_steps)
+        return max(expected, 0)
 
     def _resolve_reference_tour_length(self, instance: TSPInstance) -> tuple[float, dict[str, Any]]:
         if self.config.enable_solver_completion:
@@ -432,6 +631,52 @@ class ZeroShotRolloutRunner:
                 **extra_metadata,
             },
         }
+
+    def _build_retry_metadata(
+        self,
+        *,
+        attempts_made: int,
+        failed_attempts: list[dict[str, Any]],
+        succeeded_on_attempt: int | None,
+    ) -> dict[str, Any]:
+        return {
+            "attempts_made": attempts_made,
+            "max_step_retries": self.config.max_step_retries,
+            "retry_on_parse_failure": self.config.retry_on_parse_failure,
+            "retry_on_provider_error": self.config.retry_on_provider_error,
+            "retry_backoff_seconds": self.config.retry_backoff_seconds,
+            "failed_attempts": failed_attempts,
+            "succeeded_on_attempt": succeeded_on_attempt,
+        }
+
+    @staticmethod
+    def _extract_exception_metadata(exc: Exception) -> dict[str, Any] | None:
+        metadata = getattr(exc, "metadata", None)
+        if isinstance(metadata, dict):
+            return dict(metadata)
+        return None
+
+    @staticmethod
+    def _provider_retry_reason(exc: Exception) -> str | None:
+        metadata = getattr(exc, "metadata", None)
+        if isinstance(metadata, dict):
+            http_status = metadata.get("http_status")
+            if isinstance(http_status, int) and 500 <= http_status < 600:
+                return f"http_{http_status}"
+
+            nested_failure = metadata.get("failure")
+            if isinstance(nested_failure, dict):
+                failure_type = nested_failure.get("type")
+                if isinstance(failure_type, str) and "timeout" in failure_type.lower():
+                    return failure_type
+
+        if isinstance(exc, TimeoutError):
+            return "timeout"
+
+        message = str(exc).lower()
+        if "timed out" in message or "timeout" in message:
+            return "timeout"
+        return None
 
     def _build_model_exception_metadata(self, exc: Exception) -> dict[str, Any]:
         metadata: dict[str, Any] = {
