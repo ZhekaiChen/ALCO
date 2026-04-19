@@ -664,6 +664,20 @@ class ZeroShotRolloutRunner:
             if isinstance(http_status, int) and 500 <= http_status < 600:
                 return f"http_{http_status}"
 
+            provider_error = metadata.get("provider_error")
+            if isinstance(provider_error, dict):
+                provider_type = provider_error.get("type")
+                if isinstance(provider_type, str) and "timeout" in provider_type.lower():
+                    return provider_type
+
+                reason_errno = provider_error.get("reason_errno")
+                if isinstance(reason_errno, int) and reason_errno == 111:
+                    return "connection_refused"
+
+                reason_text = provider_error.get("reason_message")
+                if isinstance(reason_text, str) and "connection refused" in reason_text.lower():
+                    return "connection_refused"
+
             nested_failure = metadata.get("failure")
             if isinstance(nested_failure, dict):
                 failure_type = nested_failure.get("type")
@@ -674,6 +688,8 @@ class ZeroShotRolloutRunner:
             return "timeout"
 
         message = str(exc).lower()
+        if "connection refused" in message:
+            return "connection_refused"
         if "timed out" in message or "timeout" in message:
             return "timeout"
         return None
@@ -688,4 +704,51 @@ class ZeroShotRolloutRunner:
         extra = getattr(exc, "metadata", None)
         if isinstance(extra, dict):
             metadata["model_error_metadata"] = extra
+        metadata["provider_error"] = self._build_provider_error_context(exc)
         return metadata
+
+    @staticmethod
+    def _build_provider_error_context(exc: Exception) -> dict[str, Any]:
+        extra = getattr(exc, "metadata", None)
+        extra_dict = extra if isinstance(extra, dict) else {}
+        response_meta = extra_dict.get("response_metadata")
+        response_meta_dict = response_meta if isinstance(response_meta, dict) else {}
+        provider_error = extra_dict.get("provider_error")
+        provider_error_dict = provider_error if isinstance(provider_error, dict) else {}
+
+        endpoint = response_meta_dict.get("endpoint") or extra_dict.get("endpoint")
+        model_id = response_meta_dict.get("model_id") or extra_dict.get("model_id")
+        model_profile = response_meta_dict.get("model_profile") or extra_dict.get("model_profile")
+
+        http_status = extra_dict.get("http_status")
+        if not isinstance(http_status, int):
+            provider_http_status = provider_error_dict.get("http_status")
+            http_status = provider_http_status if isinstance(provider_http_status, int) else None
+
+        raw_error_payload = extra_dict.get("http_error_body")
+        if not isinstance(raw_error_payload, str):
+            payload_from_provider_error = provider_error_dict.get("error_body")
+            raw_error_payload = payload_from_provider_error if isinstance(payload_from_provider_error, str) else None
+
+        has_response_body = provider_error_dict.get("has_error_body")
+        if not isinstance(has_response_body, bool):
+            has_response_body = bool(raw_error_payload)
+
+        provider_type = provider_error_dict.get("type")
+        if not isinstance(provider_type, str):
+            provider_type = type(exc).__name__
+
+        provider_message = provider_error_dict.get("message")
+        if not isinstance(provider_message, str):
+            provider_message = str(exc)
+
+        return {
+            "type": provider_type,
+            "message": provider_message,
+            "http_status": http_status,
+            "endpoint": endpoint if isinstance(endpoint, str) else None,
+            "model_id": model_id if isinstance(model_id, str) else None,
+            "model_profile": model_profile if isinstance(model_profile, str) else None,
+            "has_response_body": has_response_body,
+            "raw_error_payload": raw_error_payload,
+        }

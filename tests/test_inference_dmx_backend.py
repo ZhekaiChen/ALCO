@@ -260,6 +260,7 @@ def test_dmx_profile_glm_shapes_request_without_reasoning_field(monkeypatch: pyt
     captured: dict[str, Any] = {}
 
     def _fake_urlopen(req, timeout):  # type: ignore[no-untyped-def]
+        captured["url"] = req.full_url
         captured["timeout"] = timeout
         captured["body"] = json.loads(req.data.decode("utf-8"))
         return _FakeHTTPResponse(
@@ -278,10 +279,47 @@ def test_dmx_profile_glm_shapes_request_without_reasoning_field(monkeypatch: pyt
     )
     output = backend.generate("prompt", instance=instance, state=state)
 
+    assert captured["url"] == "https://dmx.example/v1/chat/completions"
     assert captured["body"]["model"] == "glm-5.1"
     assert "reasoning_effort" not in captured["body"]
     assert output.metadata["model_profile"] == "glm-5.1"
     assert captured["timeout"] == 180
+
+
+def test_dmx_backend_url_error_contains_endpoint_and_reason_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
+    state = build_initial_rollout_state(instance, start_node=1)
+
+    monkeypatch.setenv("DMXAPI_BASE_URL", "https://dmx.example/v1")
+    monkeypatch.setenv("DMXAPI_API_KEY", "test-key")
+
+    def _fake_urlopen(req, timeout):  # type: ignore[no-untyped-def]
+        del req, timeout
+        raise urllib_error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+    monkeypatch.setattr("tsp_action_rl.inference.backends.urllib_request.urlopen", _fake_urlopen)
+
+    backend = DMXOpenAICompatibleBackend(
+        config=DmxOpenAICompatibleConfig(
+            debug_enabled=True,
+            debug_output_root=str(tmp_path),
+            model_profile="glm-5.1",
+            model_id="glm-5.1",
+        )
+    )
+
+    with pytest.raises(DMXAPIBackendError) as exc_info:
+        backend.generate("prompt", instance=instance, state=state)
+
+    meta = exc_info.value.metadata
+    assert meta["response_metadata"]["endpoint"] == "https://dmx.example/v1/chat/completions"
+    assert meta["response_metadata"]["model_id"] == "glm-5.1"
+    assert meta["response_metadata"]["model_profile"] == "glm-5.1"
+    assert meta["provider_error"]["type"] == "url_error"
+    assert meta["provider_error"]["reason_errno"] == 111
+    assert meta["provider_error"]["has_error_body"] is False
 
 
 def test_dmx_profile_request_omit_fields_applies_after_extra_body(monkeypatch: pytest.MonkeyPatch) -> None:

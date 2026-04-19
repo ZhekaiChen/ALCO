@@ -324,6 +324,106 @@ def test_step_retry_provider_error_then_success() -> None:
     assert episode["metadata"]["provider_retries_used"] == 1
 
 
+def test_provider_error_logging_without_model_output_has_structured_context() -> None:
+    instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
+    initial_state = load_rollout_state(FIXTURES_DIR / "rollout_state_prefix3.json")
+    backend = _SequenceBackend(
+        [
+            DMXAPIBackendError(
+                "DMXAPI request failed: <urlopen error [Errno 111] Connection refused>",
+                metadata={
+                    "response_metadata": {
+                        "endpoint": "https://dmx.example/v1/chat/completions",
+                        "model_id": "glm-5.1",
+                        "model_profile": "glm-5.1",
+                    },
+                    "provider_error": {
+                        "type": "url_error",
+                        "message": "<urlopen error [Errno 111] Connection refused>",
+                        "reason_errno": 111,
+                        "has_error_body": False,
+                    },
+                },
+            ),
+        ]
+    )
+    runner = ZeroShotRolloutRunner(
+        model_backend=backend,  # type: ignore[arg-type]
+        config=ZeroShotRolloutConfig(
+            rollout_step_policy="fixed",
+            fixed_prediction_steps=1,
+            auto_complete_last_node=True,
+            enable_solver_completion=False,
+            max_step_retries=0,
+            retry_on_parse_failure=True,
+            retry_on_provider_error=True,
+            retry_backoff_seconds=0.0,
+        ),
+        solver=None,
+    )
+    episode = runner.run_episode(instance=instance, episode_id="episode_provider_error_context", initial_state=initial_state)
+
+    assert episode["status"] == "failed_other"
+    step = episode["step_logs"][0]
+    assert step["raw_model_output"] == ""
+    provider_error = step["metadata"]["provider_error"]
+    assert provider_error["type"] == "url_error"
+    assert "Connection refused" in provider_error["message"]
+    assert provider_error["endpoint"] == "https://dmx.example/v1/chat/completions"
+    assert provider_error["model_id"] == "glm-5.1"
+    assert provider_error["model_profile"] == "glm-5.1"
+    assert provider_error["has_response_body"] is False
+    assert provider_error["raw_error_payload"] is None
+
+
+def test_step_retry_connection_refused_provider_error_then_success() -> None:
+    instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
+    initial_state = load_rollout_state(FIXTURES_DIR / "rollout_state_prefix3.json")
+    backend = _SequenceBackend(
+        [
+            DMXAPIBackendError(
+                "DMXAPI request failed: <urlopen error [Errno 111] Connection refused>",
+                metadata={
+                    "response_metadata": {
+                        "endpoint": "https://dmx.example/v1/chat/completions",
+                        "model_id": "glm-5.1",
+                        "model_profile": "glm-5.1",
+                    },
+                    "provider_error": {
+                        "type": "url_error",
+                        "message": "<urlopen error [Errno 111] Connection refused>",
+                        "reason_message": "[Errno 111] Connection refused",
+                        "reason_errno": 111,
+                        "has_error_body": False,
+                    },
+                },
+            ),
+            "Valid reasoning.\n\n<FINAL_NEXT_NODE>4</FINAL_NEXT_NODE>",
+        ]
+    )
+    runner = ZeroShotRolloutRunner(
+        model_backend=backend,  # type: ignore[arg-type]
+        config=ZeroShotRolloutConfig(
+            rollout_step_policy="fixed",
+            fixed_prediction_steps=1,
+            auto_complete_last_node=True,
+            enable_solver_completion=False,
+            max_step_retries=1,
+            retry_on_parse_failure=True,
+            retry_on_provider_error=True,
+            retry_backoff_seconds=0.0,
+        ),
+        solver=None,
+    )
+    episode = runner.run_episode(instance=instance, episode_id="episode_retry_connection_refused", initial_state=initial_state)
+
+    assert episode["status"] == "success"
+    retry = episode["step_logs"][0]["metadata"]["retry"]
+    assert retry["attempts_made"] == 2
+    assert retry["failed_attempts"][0]["provider_retry_reason"] == "connection_refused"
+    assert retry["succeeded_on_attempt"] == 2
+
+
 def test_step_retry_timeout_error_then_success() -> None:
     instance = load_tsp_instance(FIXTURES_DIR / "tsp_instance_minimal.json")
     initial_state = load_rollout_state(FIXTURES_DIR / "rollout_state_prefix3.json")

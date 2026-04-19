@@ -418,3 +418,241 @@ Output fields preserve:
 - canonical final tag (`<FINAL_NEXT_NODE>...`),
 - machine-readable `next_node_label`,
 - source mapping (`run_name`, `episode_id`, `step_index`, `instance_id`, `node_count`, `model_id`, file paths).
+
+## Step-Level RL Environment + Reward Interface
+
+Implemented modules:
+- `src/tsp_action_rl/rl/environment.py`
+- `src/tsp_action_rl/rl/reward.py`
+- Config loader: `src/tsp_action_rl/config/rl.py`
+- Default config: `configs/rl.yaml`
+
+Design points:
+- Step-level action semantics only: one action = one next node id.
+- Uses online solver-based reward inputs:
+  - `solve_reference(instance)` at reset
+  - `solve_with_fixed_prefix(instance, partial_route)` after each valid action
+- Preserves ordered fixed-prefix route semantics and 1-based node ids.
+- Reward is modular/configurable (`gap_to_reference_absolute`, `gap_to_reference_delta`, `sparse_terminal`, `gap_action_inverse`) with explicit invalid/parse penalty hooks.
+- Environment emits additive step diagnostics (`action_validation`, `solver_completion`, `reward_signal`, `done_reason`) for later RL debugging and SLIME adapter integration.
+
+Validation test:
+
+```bash
+pytest -q tests/test_rl_env.py
+```
+
+Load config snapshot in Python:
+
+```python
+from tsp_action_rl.config import load_lkh_settings, load_rl_env_settings
+from tsp_action_rl.rl import TSPRLStepEnvironment
+from tsp_action_rl.solvers import LKHIntegration
+
+lkh_settings = load_lkh_settings("configs/lkh.yaml")
+rl_settings = load_rl_env_settings("configs/rl.yaml")
+env = TSPRLStepEnvironment(solver=LKHIntegration(lkh_settings), settings=rl_settings)
+```
+
+## SLIME Adapter + RL Validation Entrypoints
+
+Real SLIME source is pinned locally under:
+- `third_party/slime/` (GitHub `THUDM/slime`, tag `v0.2.4`)
+
+This integration keeps glue code project-owned and non-invasive:
+- `src/tsp_action_rl/rl/slime_adapter.py`
+- training entrypoint: `scripts/run_rl.py`
+- evaluation entrypoint: `scripts/evaluate_model.py`
+
+Adapter behavior:
+- preserves step-level action semantics (`action = one next node id`),
+- forwards transition/reward/done through `TSPRLStepEnvironment`,
+- exposes reset/step in a lightweight adapter format,
+- supports optional future real SLIME hooks via config:
+  - `slime_adapter.train_entrypoint: module:function`
+  - `slime_adapter.eval_entrypoint: module:function`
+- supports real SLIME rollout-contract validation mode via config:
+  - `slime_adapter.use_real_slime_rollout_contract: true`
+  - `slime_adapter.slime_repo_path: third_party/slime`
+  - per-mode rollout callable path:
+    - `train.slime_rollout_function_path`
+    - `eval.slime_rollout_function_path`
+- falls back to built-in train/eval validation loops when both entrypoints are null and contract mode is disabled.
+
+Clone/pin SLIME locally (if needed):
+
+```bash
+cd /root/ALCO
+rm -rf third_party/slime
+git init third_party/slime
+cd third_party/slime
+git remote add origin https://github.com/THUDM/slime.git
+git fetch --depth 1 origin bd217a63f113d74488170914e4d39e68c12e8cf0
+git checkout --detach FETCH_HEAD
+```
+
+Verify pinned revision:
+
+```bash
+cd /root/ALCO/third_party/slime
+git rev-parse HEAD
+```
+
+Quick RL train validation run:
+
+```bash
+PYTHONPATH=src python scripts/run_rl.py \
+  --config configs/rl.yaml \
+  --lkh-config configs/lkh.yaml \
+  --pipeline adapter_validation \
+  --node-count 10 \
+  --train-episodes 1 \
+  --run-name rl_train_validation
+```
+
+Quick RL eval validation run:
+
+```bash
+PYTHONPATH=src python scripts/evaluate_model.py \
+  --config configs/rl.yaml \
+  --lkh-config configs/lkh.yaml \
+  --pipeline adapter_validation \
+  --node-count 10 \
+  --eval-episodes 1 \
+  --run-name rl_eval_validation
+```
+
+Quick validation using real SLIME rollout-function contract path:
+
+```bash
+PYTHONPATH=src python scripts/run_rl.py \
+  --config configs/rl.yaml \
+  --lkh-config configs/lkh.yaml \
+  --pipeline adapter_validation \
+  --node-count 10 \
+  --train-episodes 1 \
+  --use-real-slime-rollout-contract \
+  --slime-repo-path third_party/slime \
+  --slime-rollout-function-path tsp_action_rl.rl.slime_adapter.tsp_slime_rollout \
+  --slime-rollout-batch-size 1 \
+  --slime-n-samples-per-prompt 1 \
+  --run-name rl_train_contract_validation
+```
+
+```bash
+PYTHONPATH=src python scripts/evaluate_model.py \
+  --config configs/rl.yaml \
+  --lkh-config configs/lkh.yaml \
+  --pipeline adapter_validation \
+  --node-count 10 \
+  --eval-episodes 1 \
+  --use-real-slime-rollout-contract \
+  --slime-repo-path third_party/slime \
+  --slime-rollout-function-path tsp_action_rl.rl.slime_adapter.tsp_slime_rollout \
+  --slime-rollout-batch-size 1 \
+  --slime-n-samples-per-prompt 1 \
+  --run-name rl_eval_contract_validation
+```
+
+Outputs:
+- `outputs/rl/<run_name>/train_summary.json`
+- `outputs/rl/<run_name>/eval_summary.json`
+
+These include per-episode return/length and step-level traces (action, validity, reward components, done reason) for validation diagnostics.
+
+## Real SLIME RL Pipeline (Step-Level TSP)
+
+The SLIME training pipeline adds a real step-level RL path:
+- one rollout sample = one TSP state + ordered fixed prefix,
+- one model action = exactly one next node,
+- reward mode:
+  - `reward = 1 / (1 + gap_action)`
+  - `gap_action = (ConstrainedTourLength - ReferenceTourLength) / (ReferenceTourLength - PrefixPartialTourLength)`.
+
+The training path is wired through:
+- `src/tsp_action_rl/rl/slime_training.py`
+- `scripts/run_rl.py --pipeline slime_training`
+- `scripts/evaluate_model.py --pipeline slime_training`
+
+Default checkpoint/output root:
+- `/opt/aeon/container/`
+
+### Dependency note
+
+Tracking is implemented through a wandb-style API using SwanLab import semantics:
+
+```python
+import swanlab as wandb
+```
+
+Install RL extras (including SwanLab):
+
+```bash
+uv sync --group core --group rl --group dev
+```
+
+### Minimal Plan-Only Run (No Training Launch)
+
+```bash
+PYTHONPATH=src python scripts/run_rl.py \
+  --pipeline slime_training \
+  --config configs/rl.yaml \
+  --lkh-config configs/lkh.yaml \
+  --slime-hf-checkpoint Qwen/Qwen3-4B \
+  --slime-algorithm grpo \
+  --plan-only \
+  --run-name rl_grpo_plan
+```
+
+### Actor-Critic (PPO) Training Launch
+
+```bash
+PYTHONPATH=src python scripts/run_rl.py \
+  --pipeline slime_training \
+  --config configs/rl.yaml \
+  --lkh-config configs/lkh.yaml \
+  --slime-hf-checkpoint /path/to/hf_checkpoint \
+  --slime-algorithm actor_critic \
+  --slime-num-rollout 2 \
+  --training-rollout-batch-size 1 \
+  --training-n-samples-per-prompt 1 \
+  --run-name rl_actor_critic_train
+```
+
+### GRPO Training Launch
+
+```bash
+PYTHONPATH=src python scripts/run_rl.py \
+  --pipeline slime_training \
+  --config configs/rl.yaml \
+  --lkh-config configs/lkh.yaml \
+  --slime-hf-checkpoint /path/to/hf_checkpoint \
+  --slime-algorithm grpo \
+  --slime-num-rollout 2 \
+  --training-rollout-batch-size 1 \
+  --training-n-samples-per-prompt 4 \
+  --run-name rl_grpo_train
+```
+
+### Evaluation Launch
+
+```bash
+PYTHONPATH=src python scripts/evaluate_model.py \
+  --pipeline slime_training \
+  --config configs/rl.yaml \
+  --lkh-config configs/lkh.yaml \
+  --slime-hf-checkpoint /path/to/hf_checkpoint \
+  --slime-algorithm grpo \
+  --training-rollout-batch-size 1 \
+  --training-n-samples-per-prompt 4 \
+  --run-name rl_eval
+```
+
+Training run artifacts are saved under:
+- `/opt/aeon/container/tsp_action_rl/training/train/<run_name>/`
+- `/opt/aeon/container/tsp_action_rl/training/eval/<run_name>/`
+
+Each run writes:
+- summary json (`train_summary.json` or `eval_summary.json`),
+- checkpoint directory (`checkpoints/`),
+- optional rollout traces (`rollout_traces/`) containing prompt/raw output/reasoning/parse/validity/reward diagnostics.

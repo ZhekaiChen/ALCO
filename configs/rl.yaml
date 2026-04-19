@@ -1,0 +1,174 @@
+# Step-level RL environment defaults.
+# This config defines one-next-node action semantics and modular reward hooks.
+
+start_node_policy: random
+fixed_start_node: 1
+random_seed: 12345
+
+# Optional hard cap on environment steps (valid + invalid actions).
+max_steps: null
+
+invalid_action:
+  # Options:
+  # - terminate_episode
+  # - continue_episode
+  handling: terminate_episode
+  max_invalid_actions: null
+
+solver_completion:
+  # Keep constrained solve diagnostics in env step outputs for debugging.
+  diagnostics: true
+
+reward:
+  # Options:
+  # - gap_to_reference_absolute
+  # - gap_to_reference_delta
+  # - sparse_terminal
+  # - gap_action_inverse
+  mode: gap_to_reference_absolute
+
+  # Gap shaping scales (used by gap_* modes).
+  dense_gap_scale: -1.0
+  gap_delta_scale: 1.0
+  # Used by gap_action_inverse mode.
+  gap_action_scale: 1.0
+  min_gap_action_denominator: 1.0e-9
+
+  # Invalid/format penalties.
+  invalid_action_penalty: -1.0
+  parse_failure_penalty_enabled: false
+  parse_failure_penalty: -0.25
+
+  # Optional shaping.
+  step_penalty: 0.0
+  success_bonus: 0.0
+  sparse_success_reward: 1.0
+  sparse_nonterminal_reward: 0.0
+
+  # Optional clipping.
+  clip_min: null
+  clip_max: null
+
+# Project-owned adapter hooks for SLIME integration.
+slime_adapter:
+  include_instance_payload: false
+  include_reference_metadata: true
+  include_action_mask: true
+  include_step_counters: true
+  include_step_diagnostics_in_info: true
+
+  # When true, train/eval validation uses real SLIME rollout-function contract calls
+  # (`rollout_function_path` / `eval_function_path`) instead of the built-in loop.
+  use_real_slime_rollout_contract: false
+  slime_repo_path: third_party/slime
+
+  # Optional external hook callables for real SLIME integration.
+  # Format: "module:function"
+  train_entrypoint: null
+  eval_entrypoint: null
+
+  # Built-in quick train-validation defaults (used when train_entrypoint is null).
+  train:
+    episodes: 2
+    max_steps_per_episode: null
+    policy: random_unvisited
+    seed: 12345
+    slime_rollout_batch_size: 1
+    slime_n_samples_per_prompt: 1
+    slime_rollout_function_path: tsp_action_rl.rl.slime_adapter.tsp_slime_rollout
+    slime_eval_function_path: null
+    slime_eval_dataset_name: tsp_step_eval
+
+  # Built-in quick eval-validation defaults (used when eval_entrypoint is null).
+  eval:
+    episodes: 2
+    max_steps_per_episode: null
+    policy: nearest_unvisited
+    seed: 12345
+    slime_rollout_batch_size: 1
+    slime_n_samples_per_prompt: 1
+    slime_rollout_function_path: tsp_action_rl.rl.slime_adapter.tsp_slime_rollout
+    slime_eval_function_path: null
+    slime_eval_dataset_name: tsp_step_eval
+
+# Tiny instance defaults for quick train/eval validation entrypoints.
+quick_instance:
+  instance_path: null
+  generate_random: true
+  node_count: 10
+  seed: 12345
+  coordinate_range: [0, 1000]
+  integer_coordinates: true
+  save_generated_instance: false
+
+# Real SLIME training/eval pipeline defaults.
+slime_training:
+  algorithm: grpo
+  checkpoint_output_root: /opt/aeon/container/
+  run_name: null
+  slime_repo_path: third_party/slime
+  run_train_async: false
+
+  # Required for real SLIME runtime.
+  hf_checkpoint: null
+  model_name: null
+  load_checkpoint: null
+  ref_load: null
+
+  seed: 12345
+  num_rollout: 8
+  rollout_batch_size: 2
+  n_samples_per_prompt: 4
+  save_interval: 1
+  eval_interval: null
+
+  actor_num_nodes: 1
+  actor_num_gpus_per_node: 1
+  rollout_num_gpus: 1
+  rollout_num_gpus_per_engine: 1
+  num_gpus_per_node: 1
+
+  rollout_temperature: 0.7
+  rollout_top_p: 0.95
+  rollout_top_k: -1
+  rollout_max_prompt_len: 2048
+  rollout_max_response_len: 384
+  rollout_max_context_len: 4096
+  rollout_stop: []
+  rollout_stop_token_ids: []
+
+  eval_dataset_name: tsp_step_eval
+  save_rollout_traces: true
+  save_debug_rollout_data: false
+  save_debug_train_data: false
+
+  task_sampling:
+    node_count_range: [10, 100]
+    coordinate_range: [0, 10000]
+    integer_coordinates: true
+    random_seed: 12345
+    prefix_min_length: 1
+    prefix_max_length: null
+
+  # Action-level reward:
+  # reward = 1 / (1 + gap_action)
+  # gap_action = (ConstrainedTourLength - ReferenceTourLength) / (ReferenceTourLength - PrefixPartialTourLength)
+  reward:
+    mode: gap_action_inverse
+    gap_action_scale: 1.0
+    min_gap_action_denominator: 1.0e-9
+    invalid_action_penalty: -1.0
+    parse_failure_penalty_enabled: true
+    parse_failure_penalty: -0.25
+    step_penalty: 0.0
+    success_bonus: 0.0
+    clip_min: null
+    clip_max: null
+
+  logging:
+    enabled: true
+    wandb_project: tsp-action-rl
+    wandb_group: slime-training-step-rl
+    wandb_mode: offline
+    wandb_team: null
+    wandb_host: null

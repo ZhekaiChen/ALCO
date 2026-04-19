@@ -258,6 +258,34 @@ Integrate a real DMXAPI OpenAI-compatible backend and support configurable real 
 ### Validation
 - DMX backend unit tests for request/response handling pass.
 - Existing parser strictness remains unchanged.
+
+## Implementation round: 2026-04-19 (RL release-facing naming cleanup + operator runbook)
+
+### Goal
+Make the RL train/eval surfaces release-facing by removing temporary internal wording from operator-facing code paths while preserving current behavior.
+
+### Scope
+- Rename RL pipeline/config/CLI/docs surfaces away from `phase*`, `smoke`, `thin`, and `dry-run` wording where practical.
+- Keep low-cost backward-compatible aliases for legacy keys/flags to avoid abrupt workflow breakage.
+- Validate renamed train/eval paths with targeted RL tests.
+- Prepare formal actor-critic and GRPO operator commands.
+
+### Out of scope
+- RL algorithm or reward-function redesign.
+- Step-level task semantics changes.
+- Large training runs.
+
+### Affected areas
+- `configs/rl.yaml`
+- `src/tsp_action_rl/rl/`
+- `scripts/run_rl.py`
+- `scripts/evaluate_model.py`
+- `tests/test_rl_*`
+- `README.md`
+
+### Validation
+- Targeted RL tests for pipeline settings/CLI wiring and adapter integration.
+- Optional full test suite if practical after targeted validation.
 - Rollout smoke tests pass with updated configurable policies.
 - CLI supports node counts `10,25,50`, integer coordinates in `[0,10000]`, random start policy, and logs structured outputs.
 
@@ -452,6 +480,202 @@ Add bounded step-level retry for zero-shot rollout and introduce a lightweight e
 - Unit tests cover step-level retry success/exhaustion paths.
 - Existing strict parser behavior remains unchanged.
 - Minimal manual smoke commands documented for each DMX profile.
+
+## Implementation round: 2026-04-17 (Phase 5a step-level RL environment + reward interface)
+
+### Goal
+Implement a narrow, solver-grounded step-level TSP RL environment and modular reward interface, ready for later SLIME adapter integration without starting training in this round.
+
+### Scope
+- Add a step-level RL environment where each action is exactly one next-node decision.
+- Enforce strict action validity and ordered fixed-prefix transition semantics.
+- Integrate online solver-based reward inputs via:
+  - full reference solve at/reset before rollout steps,
+  - constrained completion after each valid action.
+- Add a configurable modular reward interface with at least:
+  - gap-to-reference reward mode(s),
+  - invalid-action penalties,
+  - optional parse/format penalty hooks,
+  - sparse/dense shaping switch support.
+- Add RL environment config hooks and smoke tests.
+- Keep diagnostics explicit and operator/research friendly for later RL debugging.
+
+### Out of scope
+- SLIME adapter implementation.
+- RL training loops or algorithm integration.
+- Solver/parser/zero-shot protocol redesign.
+- Broad logging schema redesign.
+
+### Affected files
+- `PLANS.md`
+- `configs/rl.yaml`
+- `src/tsp_action_rl/rl/environment.py`
+- `src/tsp_action_rl/rl/reward.py`
+- `src/tsp_action_rl/rl/__init__.py`
+- `src/tsp_action_rl/config/rl.py` (if config loader hook is used)
+- `src/tsp_action_rl/config/__init__.py` (if config loader hook is used)
+- `tests/test_rl_env.py`
+- `README.md`
+
+### Assumptions
+- Node indexing stays TSPLIB-style 1-based in public data/action interfaces.
+- `partial_route` stays an append-only ordered fixed prefix.
+- Solver failures in reference/constrained paths are explicit errors, not silent fallbacks.
+- Invalid-action behavior is explicit and configurable (terminate vs continue).
+
+### Validation
+- Reset initializes state and reference solution metadata correctly.
+- Valid action step appends prefix, calls constrained completion, and returns reward + diagnostics.
+- Invalid action handling follows configured policy.
+- Done conditions are explicit and stable (success, invalid termination, step budget).
+- Reward interface behavior is covered by narrow smoke tests.
+
+## Implementation round: 2026-04-17 (Phase 5b thin SLIME adapter + minimal RL smoke entrypoints)
+
+### Goal
+Add a thin project-owned adapter between the step-level TSP RL environment and future SLIME integration, plus minimal smoke-level RL train/eval entrypoints.
+
+### Scope
+- Inspect current `third_party/slime/` state and avoid invasive third-party edits.
+- Add a thin adapter wrapper around `TSPRLStepEnvironment` with clear step-level semantics.
+- Add minimal smoke training and evaluation entrypoints (`scripts/run_rl.py`, `scripts/evaluate_model.py`).
+- Add minimal config hooks in `configs/rl.yaml` for adapter/train/eval behavior.
+- Add smoke tests for adapter init/reset/step and entrypoint wiring.
+
+### Out of scope
+- Large-scale RL training runs.
+- RL algorithm tuning.
+- Redesign of environment/reward/solver/parsing subsystems.
+- Invasive edits under `third_party/slime/`.
+
+### Affected files
+- `PLANS.md`
+- `configs/rl.yaml`
+- `src/tsp_action_rl/rl/slime_adapter.py`
+- `src/tsp_action_rl/rl/__init__.py`
+- `scripts/run_rl.py`
+- `scripts/evaluate_model.py`
+- `tests/test_rl_slime_adapter.py`
+- `README.md`
+
+### Assumptions
+- `third_party/slime/` may be absent or uninitialized in this workspace; adapter must remain useful without hard dependency.
+- Step-level action remains one integer next-node decision in 1..n.
+- Online reward remains driven by existing solver-backed environment behavior.
+
+### Validation
+- Adapter reset/step smoke tests pass.
+- Minimal train/eval entrypoints run smoke loops and produce summaries.
+- Full repo tests remain green after integration.
+
+## Implementation round: 2026-04-17 (Phase 5b real SLIME repository hookup + contract smoke)
+
+### Goal
+Replace placeholder `third_party/slime` with the real `THUDM/slime` source at `v0.2.4`, and align the project-owned adapter with SLIME's actual rollout/eval extension contracts for smoke-level integration.
+
+### Scope
+- Populate `third_party/slime/` from `https://github.com/THUDM/slime` at pinned commit/tag.
+- Inspect real SLIME extension points and use real callable contracts:
+  - `rollout_function_path`
+  - `eval_function_path`
+  - rollout/eval output contracts (`RolloutFnTrainOutput`, `RolloutFnEvalOutput`)
+- Extend `src/tsp_action_rl/rl/slime_adapter.py` with a real-contract smoke path while preserving existing built-in smoke mode.
+- Add minimal CLI/config wiring for enabling real-contract smoke runs.
+- Add narrow tests for real-contract smoke path.
+
+### Out of scope
+- Large-scale RL training.
+- Invasive edits under `third_party/slime/`.
+- Redesign of step-level environment/reward semantics.
+
+### Affected files
+- `PLANS.md`
+- `README.md`
+- `configs/rl.yaml`
+- `src/tsp_action_rl/rl/slime_adapter.py`
+- `scripts/run_rl.py`
+- `scripts/evaluate_model.py`
+- `tests/test_rl_slime_adapter.py`
+- `third_party/slime/` (vendor source at pinned revision)
+
+### Assumptions
+- SLIME remains isolated under `third_party/slime/`.
+- Smoke integration can validate contract compatibility without full Ray/SGLang training runtime.
+- Step-level TSP action semantics remain unchanged.
+
+### Validation
+- Confirm `third_party/slime` checkout hash matches pinned `v0.2.4` revision.
+- Run adapter tests including real-contract smoke tests.
+- Run tiny train/eval smoke commands and verify summary artifact generation.
+
+## Implementation round: 2026-04-19 (Phase 6 real step-level RL training pipeline via SLIME)
+
+### Goal
+Implement a real step-level RL training pipeline for TSP using SLIME as the primary trainer, with explicit one-step task sampling, action-gap reward wiring, actor-critic/GRPO selection, checkpoint root support, and SwanLab (wandb-style) tracking compatibility.
+
+### Scope
+- Add Phase 6 config hooks for SLIME algorithm selection, rollout/task sampling, checkpoint/output paths, and tracking options.
+- Implement step-level task sampling for training:
+  - random node count in `[10, 100]` (configurable),
+  - random Euclidean TSP generation,
+  - full LKH reference solve,
+  - random prefix-cut selection from the reference route,
+  - one-step next-node prediction prompt context.
+- Implement explicit reward mode for:
+  - `reward = 1 / (1 + gap_action)`
+  - `gap_action = (ConstrainedTourLength - ReferenceTourLength) / (ReferenceTourLength - PrefixPartialTourLength)`
+- Keep SLIME integration thin and project-owned:
+  - custom rollout/data-source glue only,
+  - reuse SLIME train/eval entrypoints and contracts.
+- Add checkpoint/output root support with default `/opt/aeon/container/`.
+- Add SwanLab-as-wandb compatibility (`import swanlab as wandb`) for tracking.
+- Add smoke-level validations for actor-critic (`ppo`) and GRPO wiring.
+
+### Out of scope
+- Large-scale RL experiments or tuning.
+- Redesign of solver/parser/zero-shot/Phase-4 extraction architecture.
+- Invasive edits under `third_party/slime/`.
+
+### Affected files
+- `PLANS.md`
+- `configs/rl.yaml`
+- `README.md`
+- `pyproject.toml` (if needed for RL/SwanLab dependency group wiring)
+- `src/tsp_action_rl/rl/reward.py`
+- `src/tsp_action_rl/rl/environment.py`
+- `src/tsp_action_rl/rl/slime_adapter.py` and/or `src/tsp_action_rl/rl/slime_pipeline.py`
+- `src/tsp_action_rl/rl/__init__.py`
+- `scripts/run_rl.py`
+- `scripts/evaluate_model.py`
+- `tests/test_rl_env.py`
+- `tests/test_rl_slime_adapter.py`
+- `tests/test_rl_phase6_pipeline.py` (new, if needed)
+
+### Assumptions
+- SLIME `v0.2.4` is available in `third_party/slime/`.
+- Real SLIME training runtime requires external dependencies/hardware that may not be available in this dev shell; smoke validations should remain narrow but honest.
+- TSPLIB 1-based indexing and ordered fixed-prefix semantics remain invariant.
+
+### Open decisions / TODOs
+- Final minimal SLIME runtime argument set for local operator environments (model/checkpoint/hardware specifics).
+- Whether evaluation should run through a dedicated eval launcher or through `train.py` eval-only mode by configuration.
+
+### Implementation steps
+1. Add config + path hooks for Phase 6 (`algorithm`, node-range sampling, checkpoint/output root, tracking).
+2. Add the action-gap reward mode and environment diagnostics for required components.
+3. Implement thin SLIME training task sampler + rollout/reward glue.
+4. Wire `run_rl.py` and `evaluate_model.py` to real SLIME entrypoints with actor-critic/GRPO selection.
+5. Add smoke-level tests for reward math and command/wiring paths.
+6. Update README runbook for Phase 6 train/eval commands and tracking notes.
+
+### Validation
+- Reward mode unit tests validate formula and fail-fast behavior.
+- RL pipeline smoke tests validate:
+  - actor-critic (`ppo`) mapping,
+  - GRPO mapping,
+  - checkpoint root/path derivation,
+  - rollout/reward diagnostics payload structure.
+- If runtime dependencies are present, tiny train/eval smoke commands complete and emit summaries/checkpoint paths.
 
 ## Template for future plans
 

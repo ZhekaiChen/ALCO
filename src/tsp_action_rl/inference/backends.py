@@ -365,7 +365,11 @@ class DMXOpenAICompatibleBackend(ModelBackend):
 
         request_payload = json.dumps(payload).encode("utf-8")
         req = urllib_request.Request(endpoint, data=request_payload, headers=headers, method="POST")
-        response_metadata: dict[str, Any] = {"endpoint": endpoint, "model_id": self.model_name}
+        response_metadata: dict[str, Any] = {
+            "endpoint": endpoint,
+            "model_id": self.model_name,
+            "model_profile": self.config.model_profile,
+        }
 
         debug_context = self._make_debug_context(
             prompt_text=prompt_text,
@@ -395,6 +399,28 @@ class DMXOpenAICompatibleBackend(ModelBackend):
         try:
             with urllib_request.urlopen(req, timeout=self.config.timeout_seconds) as response:
                 raw_bytes = response.read()
+        except TimeoutError as exc:
+            failure = {
+                "type": "timeout_error",
+                "message": str(exc),
+            }
+            debug_path = self._write_first_debug_record(
+                debug_context=debug_context,
+                response_metadata=response_metadata,
+                failure=failure,
+            )
+            raise DMXAPIBackendError(
+                f"DMXAPI request timed out: {exc}",
+                metadata={
+                    "debug_record_path": debug_path,
+                    "response_metadata": response_metadata,
+                    "provider_error": {
+                        "type": "timeout_error",
+                        "message": str(exc),
+                        "has_error_body": False,
+                    },
+                },
+            ) from exc
         except urllib_error.HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace")
             failure = {
@@ -415,12 +441,26 @@ class DMXOpenAICompatibleBackend(ModelBackend):
                     "http_error_body": error_body,
                     "debug_record_path": debug_path,
                     "response_metadata": response_metadata,
+                    "provider_error": {
+                        "type": "http_error",
+                        "message": str(exc),
+                        "http_status": exc.code,
+                        "has_error_body": bool(error_body),
+                        "error_body": error_body,
+                    },
                 },
             ) from exc
         except urllib_error.URLError as exc:
+            reason = exc.reason
+            reason_message = str(reason) if reason is not None else str(exc)
+            reason_type = type(reason).__name__ if reason is not None else None
+            reason_errno = getattr(reason, "errno", None) if reason is not None else None
             failure = {
                 "type": "url_error",
                 "message": str(exc),
+                "reason_message": reason_message,
+                "reason_type": reason_type,
+                "reason_errno": reason_errno,
             }
             debug_path = self._write_first_debug_record(
                 debug_context=debug_context,
@@ -432,6 +472,14 @@ class DMXOpenAICompatibleBackend(ModelBackend):
                 metadata={
                     "debug_record_path": debug_path,
                     "response_metadata": response_metadata,
+                    "provider_error": {
+                        "type": "url_error",
+                        "message": str(exc),
+                        "reason_message": reason_message,
+                        "reason_type": reason_type,
+                        "reason_errno": reason_errno,
+                        "has_error_body": False,
+                    },
                 },
             ) from exc
 

@@ -32,7 +32,9 @@ local-infer = [
 sft = []
 
 # Future RL training/integration stack.
-rl = []
+rl = [
+  "swanlab>=0.6.0",
+]
 
 # Developer/test utilities.
 dev = [
@@ -44,3 +46,7 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["third_party", ".git", ".venv", "venv"]
