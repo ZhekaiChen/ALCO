@@ -7,7 +7,6 @@ venv/
 outputs/
 logs/
 checkpoints/
-data/
 .DS_Store
 
 # Local extracted/build tree from pinned LKH archive.
